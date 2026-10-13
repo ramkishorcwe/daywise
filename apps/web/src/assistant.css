@@ -1,0 +1,24 @@
+.assistant-mode { display:flex; gap:9px; align-items:center; flex-wrap:wrap; margin:16px 0 10px; font-size:12px; }
+.assistant-progress { background:#f3f6ee; border:1px solid #e0e8d8; border-radius:10px; padding:17px; margin:16px 0; }
+.assistant-progress h3,.food-evidence h3 { font-size:15px; }
+.assistant-progress .field-note { margin:10px 0; }
+.assistant-conversation { display:grid; gap:12px; margin:18px 0; max-height:260px; overflow:auto; overscroll-behavior:contain; }
+.assistant-message { padding:13px 15px; border-radius:9px; background:#eef3e9; font-size:12px; line-height:1.7; }
+.assistant-message.you { background:#f6f0e4; margin-left:35px; }
+.assistant-message small { display:block; font-size:8px; letter-spacing:1px; margin-bottom:5px; }
+.assistant-prompts { display:flex; flex-wrap:wrap; gap:7px; }
+.assistant-prompts button { border:1px solid #dbe4d4; padding:7px 9px; background:#fff; }
+.assistant-compose { display:flex; align-items:stretch; gap:8px; margin:13px 0; }
+.assistant-compose textarea { flex:1; min-width:0; min-height:70px; border:1px solid #d7e2ce; border-radius:8px; padding:12px; font:inherit; font-size:12px; resize:vertical; background:#fff; color:inherit; }
+.assistant-compose .button { align-self:stretch; }
+.food-evidence { margin-top:22px; }
+.food-evidence article { padding:14px; background:#fff; border:1px solid #e0e7d9; border-radius:9px; margin-top:10px; }
+.food-evidence article>div { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:7px; font-size:13px; }
+.food-evidence ul { list-style:none; padding:0; margin:12px 0; font-size:11px; }
+.food-evidence li { display:flex; justify-content:space-between; gap:10px; margin:7px 0; }
+.food-evidence small { font-size:10px; line-height:1.7; }
+.assistant-proposal { margin-top:18px; padding:18px; border-radius:10px; border:1px solid #c6d8b7; background:#f0f6e8; font-size:12px; line-height:1.8; }
+.assistant-proposal ul,.assistant-proposal ol { padding-left:20px; margin:12px 0; }
+.assistant-proposal h3 { font-size:16px; }
+.assistant-proposal .button-row { flex-wrap:wrap; }
+@media(max-width:600px) { .assistant-progress,.assistant-proposal { padding:13px; } .assistant-progress .form-grid { grid-template-columns:1fr; } .assistant-compose textarea { font-size:12px; } .assistant-prompts .pill { font-size:9px; } .assistant-proposal .button { padding:10px; font-size:11px; } }

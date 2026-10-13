@@ -1,0 +1,48 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { createServer } from './server';
+import { localAuthenticator, loadLocalSecret } from './auth';
+import { LocalTripStore } from './store';
+import { firebaseAdapters } from './firebase';
+import { CheckedCatalog, checkedCatalogSchema } from '../../../packages/data-adapters/src/catalog';
+import { GoogleRoutes, GooglePlaces } from '../../../packages/data-adapters/src/google';
+import { GoogleLocations } from '../../../packages/data-adapters/src/google-locations';
+import { LocalInterpreter, OpenAIInterpreter, GeminiInterpreter } from '../../../packages/data-adapters/src/assistant';
+import { join } from 'node:path';
+import { MaintenanceStore } from './maintenance';
+import { webOriginFromEnvironment } from './web-origin';
+import { validateGoogleConfiguration } from '../../../packages/data-adapters/src/google-config';
+import { GoogleGuidePlaces } from '../../../packages/data-adapters/src/google-guide';
+
+async function main() {
+  const webOrigin = webOriginFromEnvironment(process.env);
+  const mode = process.env.API_AUTH_MODE ?? 'local';
+  if (!['local', 'firebase'].includes(mode)) throw new Error('API_AUTH_MODE must be local or firebase.');
+  if (process.env.NODE_ENV === 'production' && mode === 'local') throw new Error('Local development authentication cannot run in production.');
+  if (mode === 'firebase' && !process.env.FIREBASE_PROJECT_ID) throw new Error('FIREBASE_PROJECT_ID is required.');
+  if (mode === 'firebase' && process.env.NODE_ENV === 'production' && (process.env.FIREBASE_AUTH_EMULATOR_HOST || process.env.FIRESTORE_EMULATOR_HOST)) throw new Error('Firebase emulators cannot be used in production.');
+  const directory = resolve(process.env.LOCAL_DATA_DIR ?? '.local');
+  const adapters = mode === 'local' ? { auth: localAuthenticator(await loadLocalSecret(directory)), store: new LocalTripStore(resolve(directory, 'trips.json')) } : firebaseAdapters(process.env.FIREBASE_PROJECT_ID!);
+  if (adapters.store instanceof LocalTripStore) await adapters.store.initialize();
+  const maintenance = await new MaintenanceStore(resolve(process.env.MAINTENANCE_DIR ?? 'catalogs/private/maintenance')).read();
+  if (maintenance.revision && process.env.CHECKED_CATALOG_PATH) throw new Error('Choose reviewed maintenance state or CHECKED_CATALOG_PATH, not both.');
+  const catalog = process.env.CHECKED_CATALOG_PATH ? checkedCatalogSchema.parse(JSON.parse(await readFile(resolve(process.env.CHECKED_CATALOG_PATH), 'utf8'))) : maintenance.content.catalog;
+  const operatorToken = process.env.OPERATIONS_TOKEN || (mode === 'local' ? (await loadLocalSecret(join(directory, 'operations'))).toString('base64url') : undefined);
+  const providerDailyLimit = Number(process.env.PROVIDER_DAILY_LIMIT ?? 100);
+  const assistantMode = process.env.ASSISTANT_MODE ?? 'local';
+  const aiDailyLimit = Number(process.env.AI_DAILY_LIMIT ?? 20);
+  if (!['local', 'openai', 'gemini'].includes(assistantMode) || !Number.isInteger(aiDailyLimit) || aiDailyLimit < 0 || aiDailyLimit > 200) throw new Error('Assistant mode or AI daily limit is invalid.');
+  if (assistantMode === 'openai' && (!process.env.OPENAI_API_KEY || !process.env.OPENAI_MODEL)) throw new Error('OpenAI mode requires OPENAI_API_KEY and an evaluated OPENAI_MODEL.');
+  if (assistantMode === 'gemini' && (!process.env.GEMINI_API_KEY || !process.env.GEMINI_MODEL)) throw new Error('Gemini mode requires server GEMINI_API_KEY and GEMINI_MODEL.');
+  const interpreter = assistantMode === 'openai' ? new OpenAIInterpreter(process.env.OPENAI_API_KEY!, process.env.OPENAI_MODEL!) : assistantMode === 'gemini' ? new GeminiInterpreter(process.env.GEMINI_API_KEY!, process.env.GEMINI_MODEL!) : new LocalInterpreter();
+  if (!Number.isInteger(providerDailyLimit) || providerDailyLimit < 0 || providerDailyLimit > 1000) throw new Error('PROVIDER_DAILY_LIMIT must be 0–1000.');
+  if (process.env.ENABLE_FIXTURE_PLANNING === 'true') throw new Error('Normal API startup cannot enable fixture locations. Use the isolated browser test harness.');
+  const { keys, issues } = validateGoogleConfiguration(process.env);
+  const routes = keys.GOOGLE_ROUTES_API_KEY ? new GoogleRoutes(keys.GOOGLE_ROUTES_API_KEY) : undefined;
+  const locationCapabilities = { autocomplete: !!keys.GOOGLE_PLACES_API_KEY, reverseGeocode: !!keys.GOOGLE_GEOCODING_API_KEY, timezone: !!keys.GOOGLE_TIME_ZONE_API_KEY, routing: !!routes };
+  const server = await createServer({ ...adapters, interpreter, aiDailyLimit, providerDailyLimit, operatorToken, fixtures: false, catalog: new CheckedCatalog(catalog.cities), routes, liveRoutes: routes, locations: Object.values(locationCapabilities).some(Boolean) ? new GoogleLocations(keys.GOOGLE_PLACES_API_KEY, keys.GOOGLE_GEOCODING_API_KEY, keys.GOOGLE_TIME_ZONE_API_KEY) : undefined, guide: keys.GOOGLE_PLACES_API_KEY ? new GoogleGuidePlaces(keys.GOOGLE_PLACES_API_KEY) : undefined, locationCapabilities, locationConfigurationIssues: issues, places: keys.GOOGLE_PLACES_API_KEY ? new GooglePlaces(keys.GOOGLE_PLACES_API_KEY) : undefined, webOrigin, logger: true });
+  const port = Number(process.env.API_PORT ?? 3001); if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('API_PORT must be between 1024 and 65535.');
+  await server.listen({ port, host: '127.0.0.1' });
+  const stop = async () => { await server.close(); process.exit(0); }; process.on('SIGINT', stop); process.on('SIGTERM', stop);
+}
+main().catch(error => { console.error(error instanceof Error ? error.message : 'API startup failed.'); process.exitCode = 1; });

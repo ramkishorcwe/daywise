@@ -1,0 +1,16 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "trips",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    { "collectionGroup": "trips", "fieldPath": "confirmed", "indexes": [] },
+    { "collectionGroup": "trips", "fieldPath": "input", "indexes": [] }
+  ]
+}

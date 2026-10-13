@@ -1,0 +1,17 @@
+import { useState } from 'react';
+import type { LiveItinerary } from '../../../../packages/contracts/src/locations';
+import { liveProgressSchema, type LiveProgress as Report } from '../../../../packages/contracts/src/live-progress';
+import { zonedTime } from '../../../../packages/domain/src/time';
+export default function LiveProgress({ itinerary, acceptedId, report, update }: { itinerary: LiveItinerary; acceptedId: string; report?: Report; update: (report: Report) => void }) {
+  const current = report?.acceptedId === acceptedId ? report : undefined, count = current?.completedPlaceIds.length ?? 0;
+  const [selected, setSelected] = useState(count), [arrival, setArrival] = useState(''), [error, setError] = useState('');
+  return <section className="live-card live-progress"><h2>{current?.returnedAt ? 'Return reported' : count === itinerary.stops.length ? 'Return journey remains' : 'Report your progress'}</h2><p>{count} of {itinerary.stops.length} visits reported complete. Reports are manual and unverified; no location is tracked.</p>{report && !current && <p className="field-note">A report from an earlier accepted route is retained as history and has not been applied to this route.</p>}
+    {!current?.returnedAt && <><label>Completed visits<select aria-label="Completed visits" value={selected} onChange={event => setSelected(Number(event.target.value))}><option value={0} disabled={count > 0}>Not started</option>{itinerary.stops.map((stop, index) => <option key={stop.location.id} value={index + 1} disabled={index + 1 < count}>Through {stop.location.name}</option>)}</select></label><button className="button secondary" onClick={() => {
+      try { if (Date.now() < Date.parse(itinerary.route.departureTime)) throw new Error('This route departs in the future. Record progress after departure.'); if (selected < count || selected > itinerary.stops.length) throw new Error('Completed visits cannot move backwards.'); update(liveProgressSchema.parse({ acceptedId, completedPlaceIds: itinerary.stops.slice(0, selected).map(stop => stop.location.placeId ?? stop.location.id), reportedAt: new Date().toISOString() })); setError(''); } catch (failure) { setError(failure instanceof Error ? failure.message : 'Progress could not be recorded.'); }
+    }}>Record visit progress</button></>}
+    {count === itinerary.stops.length && <><label>Actual return arrival ({itinerary.destination.timezone})<input type="datetime-local" value={arrival} onChange={event => setArrival(event.target.value)} /></label><button className="button secondary" disabled={!arrival} onClick={() => {
+      try { const [date, time] = arrival.split('T'), timestamp = zonedTime(date, time, itinerary.destination.timezone!); if (timestamp > Date.now() || timestamp < Date.parse(itinerary.route.departureTime)) throw new Error('Report a return time after departure and no later than now.'); update(liveProgressSchema.parse({ ...current, returnedAt: new Date(timestamp).toISOString(), reportedAt: new Date().toISOString() })); setError(''); } catch (failure) { setError(failure instanceof Error ? failure.message : 'Enter a valid destination-local arrival time.'); }
+    }}>{current?.returnedAt ? 'Correct return report' : 'Report return arrival'}</button>{current?.returnedAt && <p>Manually reported arrival: {new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short', timeZone: itinerary.destination.timezone }).format(new Date(current.returnedAt))}.</p>}</>}
+    {error && <p className="error-box" role="alert">{error}</p>}
+  </section>;
+}
