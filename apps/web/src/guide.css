@@ -24,3 +24,7 @@
 .guide-break { padding: 12px; background: #f0ece0; border-radius: 8px; margin-top: 12px; }
 .guide-mode-choice { margin: 18px 0; padding: 16px; border: 1px solid #dce3d7; border-radius: 10px; }
 @media (max-width: 600px) { .guide-panel .form-grid { grid-template-columns: 1fr; } .guide-panel .button-row { align-items: stretch; flex-direction: column; } }
+.meal-preferences { margin-block: 1.5rem; }
+.meal-options { display: grid; gap: 1rem; }
+.meal-option { border: 1px solid var(--line, #dce3de); border-radius: 12px; padding: 1rem; }
+.meal-route-note { background: #edf5ef; border-radius: 10px; padding: .75rem; }

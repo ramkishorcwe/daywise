@@ -1,3 +1,4 @@
+import { mealKinds } from '../../contracts/src/guide';
 import type { GuideCandidate, GuidePreferences, GuideStop, GuidePlanRequest, TravelMatrix, GuidePlan } from '../../contracts/src/guide';
 import type { SelectedLocation, LiveRoute } from '../../contracts/src/locations';
 import { liveDeparture } from './live-itinerary';
@@ -36,6 +37,7 @@ export function budgetFor(stops: GuideStop[], candidates: GuideCandidate[], p: G
   for (const stop of stops) {
     const c = candidates.find(c => c.location.id === stop.locationId)!;
     const cost = stop.costEstimate ? { ...stop.costEstimate, source: 'user_estimate' as const } : c.facts.admission;
+    if (stop.mealKind && !cost) continue; // Food is counted once below; known venue entry/cover charges still apply.
     if (!cost || !p.currency || cost.currency !== p.currency) { unknowns.push(`${c.location.name}: admission/activities unknown${cost && cost.currency !== p.currency ? ' in the selected currency' : ''}.`); continue; }
     const factor = cost.basis === 'person' ? people : 1; minimum += cost.minimum * factor; maximum += cost.maximum * factor;
     if (cost.source === 'user_estimate') unknowns.push(`${c.location.name}: your admission estimate is unverified.`);
@@ -56,6 +58,9 @@ export function scheduleGuide(order: GuideStop[], candidates: GuideCandidate[], 
   const { departure, deadline } = timing ?? liveDeparture(input, destination, now), p = input.preferences;
   if (legs.length !== order.length + 1) return null;
   let cursor = departure, travelSeconds = 0, distance = 0, lastBreak = departure, mealTaken = false;
+  const explicitMeals = mealKinds.filter(kind => p.meals?.[kind].enabled);
+  const personalMeal = p.mealBreak && !explicitMeals.length;
+  const missingMealAllowance = explicitMeals.filter(kind => !order.some(s => s.mealKind === kind)).reduce((sum, kind) => sum + p.meals![kind].durationMinutes + p.bufferMinutes + p.meals!.maxExtraMinutes, 0);
   const rows: Schedule['rows'] = [], breaks: GuidePlan['breaks'] = [];
   const lunchStart = timing?.lunchStart ?? zonedTime(input.date, '12:00', destination.timezone!), lunchEnd = timing?.lunchEnd ?? zonedTime(input.date, '15:00', destination.timezone!);
   for (let i = 0; i < order.length; i++) {
@@ -68,25 +73,32 @@ export function scheduleGuide(order: GuideStop[], candidates: GuideCandidate[], 
     const reached = cursor, duration = stop.durationMinutes * 60000;
     if (stop.preferredTime) { const appointment = timing?.appointments.get(stop.locationId) ?? zonedTime(input.date, stop.preferredTime, destination.timezone!); if (cursor > appointment) return null; cursor = appointment; }
     const hours = candidate.facts.hours;
+    const meal = stop.mealKind ? p.meals?.[stop.mealKind] : undefined;
+    const mealEnd = meal ? zonedTime(input.date, meal.endTime, destination.timezone!) : Infinity;
+    if (stop.mealKind) {
+      if (!meal?.enabled || candidate.facts.mealServices?.[stop.mealKind] === false || hours.status === 'unknown' || !candidate.facts.categories.includes('food') || (p.dietaryRules.some(r => ['vegetarian', 'pure_vegetarian', 'vegan', 'no_onion', 'no_garlic', 'no_root_vegetables'].includes(r)) && candidate.facts.vegetarianOptions === false)) return null;
+      cursor = Math.max(cursor, zonedTime(input.date, meal.startTime, destination.timezone!));
+    }
     if (hours.status !== 'unknown') {
       const slot = hours.windows.find(w => Math.max(cursor, Date.parse(w.opens)) + duration <= Date.parse(w.closes));
       if (!slot) return null;
       const entry = Math.max(cursor, Date.parse(slot.opens)); if (stop.preferredTime && entry !== cursor) return null; cursor = entry;
     }
     const arrival = cursor; cursor += duration;
+    if (cursor > mealEnd) return null;
     rows.push({ candidate, stop, arrival, departure: cursor, travel: leg.durationSeconds / 60, wait: (arrival - reached) / 60000 });
     if (candidate.facts.categories.includes('food')) { mealTaken = true; lastBreak = cursor; }
     const addBreak = (kind: 'meal' | 'rest', minutes: number) => { const starts = new Date(cursor).toISOString(); cursor += minutes * 60000; breaks.push({ kind, afterLocationId: candidate.location.id, starts, ends: new Date(cursor).toISOString(), note: kind === 'meal' ? 'Personal meal break near the preceding stop. No restaurant, preparation or meal price is verified.' : 'Personal rest break; a seat, restroom and accessible facilities are not confirmed.' }); lastBreak = cursor; };
-    if (p.mealBreak && !mealTaken && deadline - departure >= 5 * 3600000 && cursor >= lunchStart && cursor <= lunchEnd) { addBreak('meal', 45); mealTaken = true; }
+    if (personalMeal && !mealTaken && deadline - departure >= 5 * 3600000 && cursor >= lunchStart && cursor <= lunchEnd) { addBreak('meal', 45); mealTaken = true; }
     else if (p.restBreaks && (p.groupType === 'seniors' || p.childAges.length || p.pace === 'relaxed') && cursor - lastBreak >= 2 * 3600000) addBreak('rest', 15);
   }
   const lastLeg = legs.at(-1)!; cursor += lastLeg.durationSeconds * 1000; travelSeconds += lastLeg.durationSeconds; distance += lastLeg.distanceMeters;
-  if (p.mealBreak && deadline - departure >= 5 * 3600000 && !mealTaken) {
+  if (personalMeal && deadline - departure >= 5 * 3600000 && !mealTaken) {
     // Reserve time even for an early-finishing tour; do not invent a venue.
     const last = rows.at(-1)!; const starts = new Date(last.departure).toISOString();
     breaks.push({ kind: 'meal', afterLocationId: last.candidate.location.id, starts, ends: new Date(last.departure + 45 * 60000).toISOString(), note: '45-minute meal allowance before returning. Venue, dietary preparation and cost need confirmation.' }); cursor += 45 * 60000;
   }
-  return cursor <= deadline ? { rows, breaks, finish: cursor, travelSeconds, distance } : null;
+  return cursor + missingMealAllowance * 60000 <= deadline ? { rows, breaks, finish: cursor, travelSeconds, distance } : null;
 }
 function sequences<T>(items: T[], prefix: T[] = []): T[][] { if (prefix.length === 5) return [prefix]; return prefix.length ? [prefix, ...items.flatMap((item, i) => sequences(items.filter((_, j) => i !== j), [...prefix, item]))] : items.flatMap((item, i) => sequences(items.filter((_, j) => i !== j), [item])); }
 export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedLocation, candidates: GuideCandidate[], matrix: TravelMatrix, ranking: string[] = [], now = Date.now(), banned = new Set<string>(), maxVisits = 5) {
@@ -117,6 +129,7 @@ export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedL
   return { ...best, evaluated, originalTravelMinutes };
 }
 export function guideResult(input: GuidePlanRequest, destination: SelectedLocation, start: SelectedLocation, end: SelectedLocation, candidates: GuideCandidate[], order: GuideStop[], route: LiveRoute, comparison: GuidePlan['comparison'], assistantMode: 'local' | 'openai' | 'gemini', now = Date.now()): GuidePlan {
+  if (mealKinds.some(kind => input.preferences.meals?.[kind].enabled && !order.some(s => s.mealKind === kind))) throw new Error('A requested meal could not be scheduled. Adjust its window, duration or the trip deadline.');
   const schedule = scheduleGuide(order, candidates, input, destination, route.legs, now); if (!schedule) throw new Error('The final Google route no longer fits the opening windows or return deadline. Adjust the day and recalculate.');
   const budget = budgetFor(order, candidates, input.preferences, route.distanceMeters), { deadline } = liveDeparture(input, destination, now);
   if (budget.status === 'over') throw new Error('The final route exceeds your known cost limit. Review transport estimates or choose fewer places.');
@@ -126,6 +139,6 @@ export function guideResult(input: GuidePlanRequest, destination: SelectedLocati
   if (input.preferences.mobility !== 'standard') warnings.push('Provider entrance accessibility is not a complete mobility assessment. Confirm paths, vehicles and facilities directly.');
   if (input.preferences.dietaryRules.length) warnings.push('Dietary preparation is unverified. Vegetarian options do not establish a pure vegetarian or Jain kitchen.');
   return { orderMode: input.orderMode, assistantMode, comparison, budget, assumptions: [`Visit allowances are estimates for a ${input.preferences.pace} pace; edit each duration.`, `${input.preferences.bufferMinutes} minutes per arrival for entry, walking or delays; this is your allowance.`, 'Per-person estimates divide group costs across all travelers; age-specific ticket rates are unverified.', 'Gemini time-of-day suggestions are soft preferences, not verified best visiting times; actual opening windows take precedence.', 'Provider-confirmed sub-attractions in the same nearby complex are deprioritized to avoid duplicate long visits; explicit must-visits and locks take precedence.', 'Categories and indoor/outdoor suitability are inferred from provider types; detailed significance, shade and facilities may be unknown.', 'Currencies are not converted; mismatched-currency costs remain unknown.', ...(assistantMode === 'local' ? ['Local deterministic guide ranking is active; no AI model was called.'] : [`${assistantMode === 'gemini' ? 'Gemini' : 'AI'} prioritizes validated candidates; scheduling, budgets and factual checks remain deterministic.`])], excluded: input.stops.filter(s => !order.some(v => v.locationId === s.locationId)).map(s => ({ locationId: s.locationId, reason: 'Not selected in the highest-scoring feasible day under the current time, opening and budget constraints.' })), breaks: schedule.breaks,
-    stops: schedule.rows.map(r => ({ locationId: r.candidate.location.id, facts: r.candidate.facts, cost: r.stop.costEstimate ? { ...r.stop.costEstimate, source: 'user_estimate', sourceUrl: null } : r.candidate.facts.admission, reasons: [...candidateScore(r.candidate, input.preferences).reasons, r.stop.mustVisit ? 'Preserved as your must-visit.' : 'Selected within the feasible day.', r.candidate.facts.hours.status === 'unknown' ? 'Arrival uses your visit allowance; opening availability needs confirmation.' : r.wait ? 'Waiting aligns this visit with an opening period or your preferred time.' : 'Arrival fits the available opening evidence.'], durationSource: r.stop.durationSource ?? 'category_estimate', timeBand: r.stop.timeBand ?? 'any', bufferMinutes: input.preferences.bufferMinutes, travelMinutes: r.travel, waitingMinutes: r.wait, hoursStatus: r.candidate.facts.hours.status === 'closed' ? 'unknown' : r.candidate.facts.hours.status })),
+    stops: schedule.rows.map(r => ({ ...(r.stop.mealKind ? { mealKind: r.stop.mealKind } : {}), locationId: r.candidate.location.id, facts: r.candidate.facts, cost: r.stop.costEstimate ? { ...r.stop.costEstimate, source: 'user_estimate', sourceUrl: null } : r.candidate.facts.admission, reasons: [...candidateScore(r.candidate, input.preferences).reasons, r.stop.mustVisit ? 'Preserved as your must-visit.' : 'Selected within the feasible day.', r.candidate.facts.hours.status === 'unknown' ? 'Arrival uses your visit allowance; opening availability needs confirmation.' : r.wait ? 'Waiting aligns this visit with an opening period or your preferred time.' : 'Arrival fits the available opening evidence.'], durationSource: r.stop.durationSource ?? 'category_estimate', timeBand: r.stop.timeBand ?? 'any', bufferMinutes: input.preferences.bufferMinutes, travelMinutes: r.travel, waitingMinutes: r.wait, hoursStatus: r.candidate.facts.hours.status === 'closed' ? 'unknown' : r.candidate.facts.hours.status })),
     itinerary: { route, destination, start, end, stops: schedule.rows.map(r => ({ location: r.candidate.location, durationMinutes: r.stop.durationMinutes, arrivalAt: new Date(r.arrival).toISOString(), departureAt: new Date(r.departure).toISOString() })), finishAt: new Date(schedule.finish).toISOString(), deadlineAt: new Date(deadline).toISOString(), withinTime: true, warnings } };
 }

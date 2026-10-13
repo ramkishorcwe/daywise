@@ -91,3 +91,64 @@ it('automatic Gemini planning routes only its recommended verified subset instea
   const a = await api({ interpreter: { mode: 'gemini', rankGuide: async context => ({ rankedIds: context.candidates.map(c => c.id), interests: ['history'], visits: [{ locationId: context.candidates[0].id, durationMinutes: 75, timeBand: 'morning' }] }), interpret: async () => ({ intent: 'summary', minutes: null, pace: null, placeId: null }) } });
   const response = await a.post('/api/guide/plan', a.body); expect(response.statusCode).toBe(200); expect(response.json().itinerary.stops).toHaveLength(1); expect(response.json().itinerary.stops[0].location.id).toBe(a.candidates[0].location.id); expect(a.routeCall.mock.calls[0][2]).toHaveLength(1);
 });
+
+async function mealApi(nearby?: import('../packages/data-adapters/src/google-guide').GuidePlacesProvider['nearbyRestaurants']) {
+  const restaurant = (id: string) => {
+    const raw = rawPlace(id); raw.types = ['restaurant']; raw.displayName.text = id;
+    raw.currentOpeningHours!.periods![0].close!.hour = 22;
+    return raw;
+  };
+  const nearbyRestaurants = vi.fn(nearby ?? (async () => [restaurant('provider-lunch-restaurant'), restaurant('provider-dinner-restaurant')]));
+  const a = await api({ guide: { discover: async () => Array.from({ length: 5 }, (_, i) => rawPlace(`provider-attraction-${i}`)), facts: async id => rawPlace(id), nearbyRestaurants } });
+  a.matrixCall.mockImplementation(async points => matrix(points.length - 2, 2));
+  a.routeCall.mockImplementation(async (_start, _end, stops, departureTime, _optimize, _signal, mode = 'DRIVE') => ({ provider: 'google_routes', mode, durationSeconds: (stops.length + 1) * 120, distanceMeters: (stops.length + 1) * 600, encodedPolyline: 'test-only-route-with-meals', departureTime, fetchedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300000).toISOString(), trafficBasis: 'prediction_for_departure', persistence: 'memory_only', legs: Array.from({ length: stops.length + 1 }, () => ({ durationSeconds: 120, distanceMeters: 600 })), optimizedOrder: stops.map((_s, i) => i) }));
+  const { defaultMealPreferences } = await import('../packages/contracts/src/guide');
+  a.body.preferences.meals = structuredClone(defaultMealPreferences);
+  a.body.preferences.meals.lunch.enabled = true; a.body.preferences.meals.dinner.enabled = true;
+  a.body.preferences.mealBreak = true; a.body.preferences.mealGroupEstimate = 120;
+  a.body.endTime = '21:00'; a.body.orderMode = 'manual';
+  return { ...a, nearbyRestaurants };
+}
+
+it('adds lunch and dinner to five preserved visits, with seven mapped stops and a validated return', async () => {
+  const a = await mealApi(), response = await a.post('/api/guide/plan', a.body);
+  expect(response.statusCode, response.body).toBe(200);
+  const plan = response.json();
+  expect(plan.itinerary.stops).toHaveLength(7);
+  expect(plan.stops.filter((s: { mealKind?: string }) => s.mealKind).map((s: { mealKind: string }) => s.mealKind)).toEqual(['lunch', 'dinner']);
+  expect(plan.stops.filter((s: { mealKind?: string }) => !s.mealKind).map((s: { locationId: string }) => s.locationId)).toEqual(a.body.stops.map(s => s.locationId));
+  expect(plan.breaks.filter((b: { kind: string }) => b.kind === 'meal')).toHaveLength(0);
+  expect(plan.itinerary.end.id).toBe(a.body.startId);
+  expect(plan.budget.groupKnownMaximum).toBe(120); expect(plan.budget.status).toBe('unknown');
+  expect(plan.stops.filter((s: { mealKind?: string }) => s.mealKind).every((s: { mealDetour: { extraMinutes: number; fromPreviousMeters: number } }) => s.mealDetour.extraMinutes <= 15 && s.mealDetour.fromPreviousMeters <= 1500)).toBe(true);
+  expect(a.routeCall.mock.calls[0][2]).toHaveLength(7); expect(a.routeCall.mock.calls[0][4]).toBe(false);
+  expect(Math.max(...a.matrixCall.mock.calls.map(call => call[0].length))).toBeLessThanOrEqual(10);
+  const count = a.matrixCall.mock.calls.length, key = randomUUID();
+  expect((await a.post('/api/guide/plan', a.body, key)).statusCode).toBe(200);
+  const after = a.matrixCall.mock.calls.length; expect(after).toBeGreaterThan(count);
+  expect((await a.post('/api/guide/plan', a.body, key)).statusCode).toBe(409); expect(a.matrixCall.mock.calls.length).toBe(after);
+});
+
+it('does no restaurant lookup when meals are disabled and keeps the existing route shape', async () => {
+  const a = await mealApi(); a.body.preferences.meals!.lunch.enabled = false; a.body.preferences.meals!.dinner.enabled = false;
+  expect((await a.post('/api/guide/plan', a.body)).statusCode).toBe(200);
+  expect(a.nearbyRestaurants).not.toHaveBeenCalled(); expect(a.matrixCall).toHaveBeenCalledTimes(1);
+});
+
+it('restaurant provider failures and missing hours are actionable and never become invented meals', async () => {
+  const a = await mealApi(async () => { throw new Error('Test provider unavailable'); });
+  const response = await a.post('/api/guide/plan', a.body);
+  expect(response.statusCode).toBe(500); expect(response.json().itinerary).toBeUndefined(); expect(a.routeCall).not.toHaveBeenCalled();
+  const b = await mealApi(async () => [{ ...rawPlace('provider-unverified-restaurant'), types: ['restaurant'], currentOpeningHours: undefined }]);
+  const unavailable = await b.post('/api/guide/plan', b.body);
+  expect(unavailable.statusCode).toBe(422); expect(unavailable.json().error.code).toBe('MEAL_NOT_FOUND'); expect(unavailable.json().itinerary).toBeUndefined();
+});
+
+it('rejects meal labels supplied by clients and refuses a final restaurant route exceeding detour limits', async () => {
+  const a = await mealApi();
+  expect((await a.post('/api/guide/plan', { ...a.body, stops: [{ ...a.body.stops[0], mealKind: 'lunch' }] })).statusCode).toBe(422);
+  const original = a.routeCall.getMockImplementation()!;
+  a.routeCall.mockImplementation(async (...args) => { const route = await original(...args); return { ...route, legs: route.legs.map(leg => ({ ...leg, distanceMeters: 5000 })) }; });
+  const response = await a.post('/api/guide/plan', a.body);
+  expect(response.statusCode).toBe(422); expect(response.json().error.code).toBe('MEAL_FINAL_ROUTE_INFEASIBLE'); expect(response.json().itinerary).toBeUndefined();
+});
