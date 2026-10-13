@@ -29,7 +29,7 @@ test('all reported stops leave a return journey and starting another day preserv
   await page.getByRole('button', { name: 'Confirm this plan', exact: true }).click(); await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
   await page.getByRole('button', { name: 'Report progress or a delay', exact: true }).click(); await page.getByRole('button', { name: 'Use my confirmed plan', exact: true }).click();
   await page.getByRole('combobox', { name: 'Completed stops', exact: true }).selectOption('6');
-  await page.getByRole('button', { name: 'Record progress', exact: true }).click(); await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Record progress', exact: true }).click(); await expect(page.getByText(/Progress revision 1/)).toBeVisible(); await page.keyboard.press('Escape');
   await expect(page.getByText('RETURN JOURNEY', { exact: true })).toBeVisible();
   await expect(page.getByText(/arrival at the endpoint has not been reported/)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
