@@ -1,0 +1,26 @@
+.guide-panel { border-top: 1px solid var(--border, #dde4dd); padding-top: 24px; margin-top: 22px; }
+.guide-panel h2,.guide-panel h3 { margin-top: 22px; }
+.guide-panel fieldset { border: 0; padding: 0; margin: 18px 0; }
+.guide-panel legend { font-weight: 700; margin-bottom: 10px; }
+.guide-panel select,.guide-panel textarea,.guide-edit-list input { width: 100%; min-height: 42px; border: 1px solid #d8dfd8; background: #f7f9f5; border-radius: 8px; padding: 9px 10px; color: #233d34; font: inherit; }
+.guide-panel textarea { min-height: 90px; resize: vertical; }
+.guide-panel details { margin: 16px 0; }
+.guide-panel details summary { cursor: pointer; font-weight: 600; }
+.guide-candidates { display: grid; gap: 12px; }
+.guide-candidates article,.guide-edit-list > li { border: 1px solid #dce3d7; border-radius: 10px; padding: 14px; background: #fafbf7; overflow-wrap: anywhere; }
+.guide-candidates h4 { margin: 0 0 8px; font-size: 16px; }
+.guide-candidates p,.guide-review p { margin: 8px 0; line-height: 1.6; }
+.guide-edit-list { list-style: none; padding: 0; display: grid; gap: 12px; }
+.guide-edit-list .form-grid { margin: 14px 0; }
+.guide-edit-list .text-button { font-size: 12px; text-align: left; }
+.guide-review { border-top: 1px solid #dce3d7; padding-top: 24px; margin-top: 24px; overflow-wrap: anywhere; }
+.guide-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; }
+.guide-summary span { background: #edf3e5; padding: 12px; border-radius: 8px; display: grid; gap: 4px; }
+.guide-budget { background: #f6f1e7; border-radius: 10px; padding: 14px; margin: 18px 0; }
+.guide-timeline { list-style: none; padding: 0; display: grid; gap: 16px; }
+.guide-timeline > li { border-left: 3px solid #b6cbb0; padding: 14px; background: #f7f9f4; border-radius: 0 10px 10px 0; }
+.guide-timeline .guide-highlight { border-color: #246c5c; background: #e5f0df; }
+.guide-timeline a { display: inline-block; margin: 6px 12px 6px 0; color: #246c5c; text-decoration: underline; }
+.guide-break { padding: 12px; background: #f0ece0; border-radius: 8px; margin-top: 12px; }
+.guide-mode-choice { margin: 18px 0; padding: 16px; border: 1px solid #dce3d7; border-radius: 10px; }
+@media (max-width: 600px) { .guide-panel .form-grid { grid-template-columns: 1fr; } .guide-panel .button-row { align-items: stretch; flex-direction: column; } }

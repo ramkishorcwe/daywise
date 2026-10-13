@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Browser access is denied. Admin SDK calls bypass rules, so ownership and
+    // revision checks are implemented in the API repository transactions.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

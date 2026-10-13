@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.npm-cache/
+.tmp/
+.local/
+catalogs/private/
+test-results/
+playwright-report/
+artifacts/
+.env
+.env.*
+!.env.example
+secrets.txt
+*[cC]redential*.txt

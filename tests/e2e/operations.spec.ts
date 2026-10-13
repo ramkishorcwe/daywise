@@ -1,0 +1,31 @@
+import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+test('phone availability and private export/deletion preserve the separate browser plan', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/');
+  await page.getByRole('button', { name: 'Confirm this plan', exact: true }).click();
+  await page.getByRole('button', { name: 'Data connections', exact: true }).click();
+  await expect(page.getByText('Live city plans unavailable', { exact: true })).toBeVisible();
+  await expect(page.getByText('Test plans available', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Connect backend', exact: true }).click();
+  await page.getByRole('button', { name: 'Save current preferences', exact: true }).click();
+  const download = page.waitForEvent('download'); await page.getByRole('button', { name: /^Export backend trip / }).click();
+  const file = await download; expect(file.suggestedFilename()).toMatch(/^daywise-private-trip-.*\.json$/);
+  const exported = JSON.parse(await readFile((await file.path())!, 'utf8'));
+  expect(exported.dataMode).toBe('software_fixture'); expect(exported.input.cityId).toBe('jaipur-test'); expect(exported).not.toHaveProperty('ownerId'); expect(exported).not.toHaveProperty('token');
+  await page.getByRole('button', { name: /^Delete backend trip / }).click();
+  await expect(page.getByText(/Browser drafts and downloaded exports stay separate/)).toBeVisible();
+  await page.getByRole('button', { name: 'Delete backend trip', exact: true }).click();
+  await expect(page.getByText('No backend trips in this session.', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.keyboard.press('Escape'); await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled();
+});
+test('an unavailable readiness service never becomes a claim that live planning is ready', async ({ page }) => {
+  await page.route('**/api/readiness', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'UNAVAILABLE', message: 'Test interruption.' } }) }));
+  await page.goto('/'); await page.getByRole('button', { name: 'Data connections', exact: true }).click();
+  await expect(page.getByText(/Availability could not be checked/)).toBeVisible();
+  await page.getByRole('button', { name: 'Connect backend', exact: true }).click(); await expect(page.getByText('Authenticated session', { exact: true })).toBeVisible();
+  await expect(page.getByText('Live city plans available', { exact: true })).toHaveCount(0);
+  const privateFile = resolve(process.env.LOCAL_DATA_DIR ?? '.local', 'development-session-secret').replaceAll('\\', '/');
+  const privateResponse = await page.request.get(`/@fs/${privateFile}`); expect(privateResponse.status()).toBe(403);
+});

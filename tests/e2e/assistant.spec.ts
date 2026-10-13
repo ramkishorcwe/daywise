@@ -1,0 +1,50 @@
+import { expect, test } from '@playwright/test';
+
+test('assistant food evidence, rejection, accepted delay and workspace restoration', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Confirm this plan', exact: true }).click();
+  await page.getByRole('button', { name: 'Travel assistant', exact: true }).click();
+  await page.getByRole('button', { name: 'Use my confirmed plan', exact: true }).click();
+  await expect(page.getByText('Local assistant · AI not connected', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Show Jain food evidence', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Food evidence', exact: true })).toBeVisible();
+  await expect(page.getByText('Fixture match', { exact: true })).toBeVisible();
+  await expect(page.getByText('Evidence incomplete', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Delay 30 minutes', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Review this revision', exact: true })).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Keep confirmed plan', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Review this revision', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Use relaxed pace', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Review this revision', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Accept revision', exact: true }).click();
+  await expect(page.getByText('Revision accepted and saved. Future changes still require review.', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByText('Progress has been reported.', { exact: true })).toBeVisible();
+  await expect(page.getByText('relaxed pace', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await page.reload();
+  await page.getByRole('button', { name: 'Travel assistant', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Record progress', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Summarize my plan', exact: true }).click();
+  await expect(page.getByRole('log')).toContainText('All facts are fictional test data.');
+});
+
+test('phone progress preserves completed stops and unsupported live requests do not fabricate proposals', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/'); await page.getByRole('button', { name: 'Confirm this plan', exact: true }).click();
+  await page.getByRole('button', { name: 'Travel assistant', exact: true }).click();
+  await page.getByRole('button', { name: 'Use my confirmed plan', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Completed stops', exact: true }).selectOption('1');
+  await page.getByRole('spinbutton', { name: 'Lateness at this point (minutes)', exact: true }).fill('10');
+  await page.getByRole('button', { name: 'Record progress', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Message the planning assistant', exact: true }).fill('Check live traffic and make up a detour');
+  await page.getByRole('button', { name: 'Send assistant message', exact: true }).click();
+  await expect(page.getByRole('log')).toContainText('not connected');
+  await expect(page.getByRole('heading', { name: 'Review this revision', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Delay 30 minutes', exact: true }).click();
+  await expect(page.getByText(/completed, retained/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: 'Accept revision', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled();
+});

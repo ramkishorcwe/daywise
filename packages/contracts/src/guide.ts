@@ -1,0 +1,50 @@
+import { z } from 'zod';
+import { locationSchema, liveItinerarySchema, providerPlaceId } from './locations';
+export const interests = ['history', 'forts', 'palaces', 'culture', 'temples', 'shopping', 'nature', 'gardens', 'museums', 'food', 'nightlife', 'hidden_gems'] as const;
+export const guidePreferencesSchema = z.strictObject({
+  interests: z.array(z.enum(interests)).max(12).default(['history', 'culture']), pace: z.enum(['relaxed', 'balanced', 'packed']).default('balanced'),
+  groupType: z.enum(['unspecified', 'solo', 'couple', 'friends', 'family', 'seniors']).default('unspecified'), environment: z.enum(['any', 'indoor', 'outdoor']).default('any'),
+  mobility: z.enum(['standard', 'limited', 'wheelchair']).default('standard'), travelMode: z.enum(['DRIVE', 'WALK', 'BICYCLE']).default('DRIVE'),
+  adults: z.number().int().min(1).max(12), childAges: z.array(z.number().int().min(0).max(17)).max(11),
+  groupBudget: z.number().finite().nonnegative().nullable(), perPersonBudget: z.number().finite().nonnegative().nullable().default(null), currency: z.string().regex(/^[A-Z]{3}$/).nullable(),
+  dietaryRules: z.array(z.string().max(40)).max(8), visitedPlaceIds: z.array(z.string().max(10000)).max(30).default([]),
+  mealBreak: z.boolean().default(true), restBreaks: z.boolean().default(true), bufferMinutes: z.number().int().min(0).max(45).default(10),
+  mealGroupEstimate: z.number().finite().nonnegative().nullable().default(null), transportGroupEstimate: z.number().finite().nonnegative().nullable().default(null),
+  transportPerKmEstimate: z.number().finite().nonnegative().nullable().default(null),
+  notes: z.string().max(1200).default(''), useAI: z.boolean().default(true),
+}).refine(p => p.adults + p.childAges.length <= 12, 'At most 12 travelers.').refine(p => p.groupType !== 'solo' || p.adults + p.childAges.length === 1, 'Solo means one traveler; update the group size below.').refine(p => (p.groupBudget === null && p.perPersonBudget === null && p.mealGroupEstimate === null && p.transportGroupEstimate === null && p.transportPerKmEstimate === null) || !!p.currency, 'Select a currency for monetary amounts.');
+export type GuidePreferences = z.infer<typeof guidePreferencesSchema>;
+const costShape = { minimum: z.number().finite().nonnegative(), maximum: z.number().finite().nonnegative(), currency: z.string().regex(/^[A-Z]{3}$/), basis: z.enum(['person', 'group']) };
+export const costEstimateSchema = z.strictObject(costShape).refine(c => c.maximum >= c.minimum, 'Maximum must follow minimum.');
+export const costSchema = z.strictObject({ ...costShape, source: z.enum(['reviewed_catalog', 'user_estimate']), sourceUrl: z.url().nullable() }).refine(c => c.maximum >= c.minimum, 'Maximum must follow minimum.');
+export const guideFactsSchema = z.strictObject({
+  categories: z.array(z.enum(interests)).max(12), environment: z.enum(['indoor', 'outdoor', 'unknown']), rating: z.number().min(0).max(5).nullable(), reviews: z.number().int().nonnegative().nullable(),
+  hours: z.strictObject({ status: z.enum(['date_specific', 'usual', 'unknown', 'closed']), windows: z.array(z.strictObject({ opens: z.iso.datetime(), closes: z.iso.datetime() })).max(20), description: z.array(z.string().max(500)).max(10), source: z.enum(['google', 'reviewed_catalog']).optional(), sourceUrl: z.url().nullable().optional() }),
+  admission: costSchema.nullable(), accessible: z.boolean().nullable(), goodForChildren: z.boolean().nullable(), vegetarianOptions: z.boolean().nullable(),
+  containingPlaceIds: z.array(providerPlaceId).max(10).optional(), website: z.url().nullable(), providerUri: z.url().nullable(), description: z.string().max(2500).nullable(), checkedAt: z.iso.datetime(),
+});
+export type GuideFacts = z.infer<typeof guideFactsSchema>;
+export const candidateSchema = z.strictObject({ location: locationSchema, facts: guideFactsSchema, suggestedMinutes: z.number().int().min(10).max(240), reasons: z.array(z.string().max(500)).max(10), score: z.number().finite() });
+export type GuideCandidate = z.infer<typeof candidateSchema>;
+const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+export const guideDiscoverSchema = z.strictObject({ destinationId: z.string().uuid(), date: z.iso.date(), preferences: guidePreferencesSchema });
+export const guideCandidateRequestSchema = guideDiscoverSchema.extend({ locationId: z.string().uuid() });
+export const guideStopSchema = z.strictObject({ locationId: z.string().uuid(), durationMinutes: z.number().int().min(10).max(240), mustVisit: z.boolean(), locked: z.boolean(), preferredTime: clock.nullable(), costEstimate: costEstimateSchema.nullable(), durationSource: z.enum(['category_estimate', 'gemini_estimate', 'user']).optional(), timeBand: z.enum(['any', 'morning', 'afternoon', 'evening']).optional() });
+export type GuideStop = z.infer<typeof guideStopSchema>;
+export const savedGuideSchema = z.strictObject({ preferences: guidePreferencesSchema, stops: z.array(guideStopSchema.omit({ locationId: true }).extend({ placeId: providerPlaceId })).max(5) });
+export type SavedGuide = z.infer<typeof savedGuideSchema>;
+export const guidePlanRequestSchema = z.strictObject({ destinationId: z.string().uuid(), startId: z.string().uuid(), endId: z.string().uuid().nullable(), returnToStart: z.boolean(), allowOutsideStart: z.boolean(), date: z.iso.date(), startTime: clock, endTime: clock, preferences: guidePreferencesSchema, orderMode: z.enum(['smart', 'manual']), stops: z.array(guideStopSchema).min(1).max(8) }).refine(v => v.returnToStart || !!v.endId, 'Choose a return point.').refine(v => new Set(v.stops.map(s => s.locationId)).size === v.stops.length, 'Choose each place once.');
+export type GuidePlanRequest = z.infer<typeof guidePlanRequestSchema>;
+export const guideRankingSchema = z.strictObject({ rankedIds: z.array(z.string().uuid()).max(8), interests: z.array(z.enum(interests)).max(12), visits: z.array(z.strictObject({ locationId: z.string().uuid(), durationMinutes: z.number().int().min(10).max(240), timeBand: z.enum(['any', 'morning', 'afternoon', 'evening']) })).max(8).optional() });
+export type GuideRanking = z.infer<typeof guideRankingSchema>;
+export const guideDiscoverySchema = z.strictObject({ candidates: z.array(candidateSchema).max(8), warnings: z.array(z.string()).max(30), assistantMode: z.enum(['local', 'openai', 'gemini']) });
+export const guidePlanSchema = z.strictObject({
+  itinerary: liveItinerarySchema, orderMode: z.enum(['smart', 'manual']), assistantMode: z.enum(['local', 'openai', 'gemini']),
+  stops: z.array(z.strictObject({ locationId: z.string().uuid(), facts: guideFactsSchema, cost: costSchema.nullable(), reasons: z.array(z.string()).max(12), bufferMinutes: z.number().nonnegative(), travelMinutes: z.number().nonnegative(), waitingMinutes: z.number().nonnegative(), durationSource: z.enum(['category_estimate', 'gemini_estimate', 'user']).optional(), timeBand: z.enum(['any', 'morning', 'afternoon', 'evening']).optional(), hoursStatus: z.enum(['date_specific', 'usual', 'unknown']) })).min(1).max(5),
+  breaks: z.array(z.strictObject({ kind: z.enum(['meal', 'rest']), afterLocationId: z.string().uuid(), starts: z.iso.datetime(), ends: z.iso.datetime(), note: z.string() })).max(10),
+  budget: z.strictObject({ currency: z.string().nullable(), groupKnownMinimum: z.number().nonnegative(), groupKnownMaximum: z.number().nonnegative(), perPersonKnownMinimum: z.number().nonnegative(), perPersonKnownMaximum: z.number().nonnegative(), groupLimit: z.number().nullable(), unknowns: z.array(z.string()).max(20), status: z.enum(['unknown', 'within_estimates', 'over']) }),
+  assumptions: z.array(z.string()).max(30), excluded: z.array(z.strictObject({ locationId: z.string().uuid(), reason: z.string() })).max(8),
+  comparison: z.strictObject({ originalTravelMinutes: z.number().nonnegative().nullable(), selectedTravelMinutes: z.number().nonnegative(), evaluatedSequences: z.number().int().nonnegative() }),
+});
+export type GuidePlan = z.infer<typeof guidePlanSchema>;
+export type TravelMatrix = Array<Array<{ durationSeconds: number; distanceMeters: number } | null>>;

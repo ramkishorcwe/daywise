@@ -1,0 +1,82 @@
+import { expect, test } from '@playwright/test';
+
+test('phone day view preserves an accepted revision exactly across reload and backend interruption', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/');
+  await page.getByRole('button', { name: 'Confirm this plan', exact: true }).click();
+  await page.getByRole('button', { name: 'Travel assistant', exact: true }).click();
+  await page.getByRole('button', { name: 'Use my confirmed plan', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Completed stops', exact: true }).selectOption('1');
+  await page.getByRole('button', { name: 'Record progress', exact: true }).click();
+  await page.getByRole('button', { name: 'Delay 30 minutes', exact: true }).click();
+  await page.getByRole('button', { name: 'Accept revision', exact: true }).click(); await page.keyboard.press('Escape');
+  const timeline = await page.locator('.stop-time').allTextContents(); const total = await page.locator('.budget-total').textContent();
+  await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
+  await expect(page.locator('.day-next h2')).toHaveText('City Story Museum');
+  await expect(page.getByText('1 of 6', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await page.route('**/api/**', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'UNAVAILABLE', message: 'Simulated offline backend.' } }) }));
+  await page.reload(); await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled();
+  expect(await page.locator('.stop-time').allTextContents()).toEqual(timeline); expect(await page.locator('.budget-total').textContent()).toBe(total);
+  await expect(page.getByText('Your confirmed plan is safe.', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Follow my day', exact: true }).click(); await expect(page.locator('.day-next h2')).toHaveText('City Story Museum');
+  await page.getByRole('button', { name: 'Report progress or a delay', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Your confirmed plan is preserved.'); await page.keyboard.press('Escape');
+  await expect(page.locator('.day-next h2')).toHaveText('City Story Museum');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+test('all reported stops leave a return journey and starting another day preserves the saved day', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 760 }); await page.goto('/');
+  await page.getByRole('button', { name: 'Confirm this plan', exact: true }).click(); await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
+  await page.getByRole('button', { name: 'Report progress or a delay', exact: true }).click(); await page.getByRole('button', { name: 'Use my confirmed plan', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Completed stops', exact: true }).selectOption('6');
+  await page.getByRole('button', { name: 'Record progress', exact: true }).click(); await page.keyboard.press('Escape');
+  await expect(page.getByText('RETURN JOURNEY', { exact: true })).toBeVisible();
+  await expect(page.getByText(/arrival at the endpoint has not been reported/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: 'Plan another day', exact: true }).click(); await expect(page.getByRole('dialog')).toBeVisible(); await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Saved plans', exact: true }).click();
+  await page.getByLabel('Saved day status', { exact: true }).selectOption('progress');
+  await expect(page.locator('.saved-card')).toHaveCount(1);
+  await expect(page.locator('.saved-card')).toContainText('PROGRESS REPORTED');
+  await page.locator('.saved-card').getByRole('button', { name: 'Open plan', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Follow my day', exact: true }).click(); await expect(page.getByText('RETURN JOURNEY', { exact: true })).toBeVisible();
+});
+test('the day view follows confirmation while draft changes remain unaccepted', async ({ page }) => {
+  await page.goto('/'); await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Confirm your day first', exact: true })).toBeVisible(); await page.getByRole('button', { name: 'Review my itinerary', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm this plan', exact: true }).click(); await page.getByRole('button', { name: 'Remove Heritage Gallery', exact: true }).click();
+  await page.getByRole('button', { name: 'Follow my day', exact: true }).click(); await expect(page.locator('.day-next h2')).toHaveText('Heritage Gallery');
+  await expect(page.getByText(/Unaccepted edits stay in your planner/)).toBeVisible();
+  await page.getByRole('button', { name: 'View itinerary', exact: true }).click(); await expect(page.getByText('Your confirmed plan is safe.', { exact: true })).toBeVisible();
+});
+test('a changed backend confirmation cannot silently replace the saved browser day', async ({ page }) => {
+  await page.goto('/'); await page.getByRole('button', { name: 'Confirm this plan', exact: true }).click();
+  await page.getByRole('button', { name: 'Travel assistant', exact: true }).click(); await page.getByRole('button', { name: 'Use my confirmed plan', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Completed stops', exact: true }).selectOption('1'); await page.getByRole('button', { name: 'Record progress', exact: true }).click();
+  await expect(page.getByText(/Progress revision 1/)).toBeVisible(); await page.keyboard.press('Escape');
+  let mismatch: 'confirmation' | 'progress' = 'confirmation';
+  await page.route('**/api/trips/*', async route => { if (route.request().method() !== 'GET') return route.continue(); const response = await route.fetch(); const value = await response.json(); if (mismatch === 'confirmation') value.confirmed.input.pace = 'relaxed'; else delete value.progress; await route.fulfill({ response, json: value }); });
+  await page.getByRole('button', { name: 'Travel assistant', exact: true }).click(); await expect(page.getByRole('alert')).toContainText('backend confirmation differs');
+  await expect(page.getByRole('button', { name: 'Record progress', exact: true })).toHaveCount(0); await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled();
+  mismatch = 'progress'; await page.getByRole('button', { name: 'Travel assistant', exact: true }).click(); await expect(page.getByRole('alert')).toContainText('Backend progress is older'); await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Follow my day', exact: true }).click(); await expect(page.getByText('1 of 6', { exact: true })).toBeVisible();
+});
+
+test('a late progress response cannot attach an old workspace to a separate new day', async ({ page }) => {
+  await page.goto('/'); await page.getByRole('button', { name: 'Confirm this plan', exact: true }).click();
+  await page.getByRole('button', { name: 'Travel assistant', exact: true }).click(); await page.getByRole('button', { name: 'Use my confirmed plan', exact: true }).click();
+  let release: () => void = () => {}; const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/trips/*/progress', async route => { await held; await route.continue(); });
+  await page.getByRole('combobox', { name: 'Completed stops', exact: true }).selectOption('1');
+  const requested = page.waitForRequest(request => request.url().endsWith('/progress'));
+  await page.getByRole('button', { name: 'Record progress', exact: true }).click(); await requested;
+  await page.keyboard.press('Escape'); await page.getByRole('button', { name: 'Plan another day', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  const completed = page.waitForResponse(response => response.url().endsWith('/progress')); release(); await completed;
+  await page.getByRole('button', { name: 'Your preferences', exact: true }).click(); await page.getByRole('button', { name: 'Build my day', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Confirm this plan', exact: true })).toBeVisible();
+  await expect(page.getByText('Progress has been reported.', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Follow my day', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Confirm your day first', exact: true })).toBeVisible();
+});

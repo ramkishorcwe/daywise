@@ -1,0 +1,33 @@
+.day-view { margin-top: 24px; }
+.day-view-context { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; font-size: 12px; color: #637557; }
+.day-view-grid { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap: 22px; margin-top: 22px; align-items: start; }
+.day-next,.day-progress { border: 1px solid #dce5d4; border-radius: 12px; background: #fff; padding: 26px; min-width: 0; }
+.day-next { background: #f4f7ee; }
+.day-next h2 { font-size: 26px; line-height: 1.4; margin-top: 12px; overflow-wrap: anywhere; }
+.day-anchor { display: flex; align-items: center; gap: 7px; font-size: 12px; margin-top: 15px; line-height: 1.7; color: #6c7f60; }
+.day-anchor svg { flex-shrink: 0; }
+.day-facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px 12px; margin: 25px 0; }
+.day-facts dt { font-size: 11px; line-height: 1.7; color: #6f7e65; }
+.day-facts dd { font: 650 19px 'Manrope Variable',sans-serif; margin: 5px 0 0; overflow-wrap: anywhere; }
+.day-reason { font-size: 13px; line-height: 1.9; color: #65785a; }
+.day-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0 12px; }
+.day-progress h3 { font-size: 17px; }
+.day-progress>p { font-size: 12px; line-height: 1.8; margin-top: 14px; }
+.day-progress progress { appearance: none; width: 100%; height: 7px; border: 0; margin: 15px 0 8px; border-radius: 6px; background: #e7eedf; }
+.day-progress progress::-webkit-progress-bar { background: #e7eedf; border-radius: 6px; }
+.day-progress progress::-webkit-progress-value { background: #337d62; border-radius: 6px; }
+.day-progress progress::-moz-progress-bar { background: #337d62; border-radius: 6px; }
+.day-progress ol { list-style: none; padding: 0; display: grid; gap: 16px; margin: 17px 0 22px; }
+.day-progress li,.day-return { display: flex; align-items: center; gap: 11px; font-size: 12px; }
+.day-progress li[aria-current] b { color: #22654e; }
+.day-progress small { display: block; color: #74836c; font-size: 11px; line-height: 1.6; margin-top: 3px; }
+.day-step { width: 25px; height: 25px; flex-shrink: 0; border-radius: 50%; background: #eef3e8; color: #6a805a; display: grid; place-items: center; }
+.day-step.done { background: #dcecdf; color: #2e7356; }
+.day-return { padding-top: 18px; border-top: 1px solid #e4eada; line-height: 1.8; }
+.day-return svg { flex-shrink: 0; }
+.day-budget b { display: block; font-size: 19px; color: #456b42; }
+.day-new { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; padding: 20px 0; margin-top: 8px; }
+.day-new p { font-size: 12px; line-height: 1.8; color: #6c7e62; }
+@media(max-width:900px) { .day-view-grid { grid-template-columns: minmax(0,1fr); } }
+@media(max-width:600px) { .day-next,.day-progress { padding: 20px; }.day-next h2 { font-size: 24px; }.day-facts dd { font-size: 17px; }.day-controls { flex-direction: column; }.day-controls .button { width: 100%; }.day-new .button { width: 100%; } }
+@media(max-width:440px) { .sidebar { gap: 8px; padding: 12px 10px; }.sidebar .brand { font-size: 18px; gap: 5px; }.sidebar nav { gap: 0; }.sidebar .nav { padding: 8px 6px; gap: 0; } }
