@@ -22,6 +22,7 @@ test('assistant food evidence, rejection, accepted delay and workspace restorati
   await expect(page.getByText('Progress has been reported.', { exact: true })).toBeVisible();
   await expect(page.getByText('relaxed pace', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.getByText('Your draft and confirmed plan are saved on this device.', { exact: true })).toBeVisible();
   await page.reload();
   await page.getByRole('button', { name: 'Travel assistant', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Record progress', exact: true })).toBeVisible();

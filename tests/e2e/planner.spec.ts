@@ -15,6 +15,7 @@ test('build, edit, preserve a confirmed plan, and restore it after reload', asyn
   await page.getByRole('dialog').getByRole('button', { name: 'Keep confirmed plan' }).click();
   await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Save draft' }).click();
+  await expect(page.getByText('Your draft and confirmed plan are saved on this device.', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Saved plans', exact: true }).click();
@@ -43,6 +44,7 @@ test('accepting reviewed changes persists the new confirmed snapshot', async ({ 
   await page.getByRole('button', { name: 'Accept changes' }).click();
   await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Save draft' }).click();
+  await expect(page.getByText('Your draft and confirmed plan are saved on this device.', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled();
   await expect(page.getByRole('heading', { name: 'Heritage Gallery', exact: true })).toHaveCount(0);

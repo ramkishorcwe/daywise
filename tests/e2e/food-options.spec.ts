@@ -9,7 +9,8 @@ test('meal replacement is a reviewed draft, and accepting it survives reload', a
   await expect(page.getByText('Your confirmed plan is safe.', { exact: true })).toBeVisible(); await expect(page.getByRole('heading', { name: 'Garden Table', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Review changes', exact: true }).click(); await page.getByRole('dialog').getByRole('button', { name: 'Keep confirmed plan', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Corner Café', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Food options', exact: true }).click(); await meal.getByRole('button', { name: 'Use Garden Table in draft', exact: true }).click(); await page.getByRole('button', { name: 'Review changes', exact: true }).click(); await page.getByRole('dialog').getByRole('button', { name: 'Accept changes', exact: true }).click();
-  await page.getByRole('button', { name: 'Save draft', exact: true }).click(); await page.reload(); await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled(); await expect(page.getByRole('heading', { name: 'Garden Table', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click(); await expect(page.getByText('Your draft and confirmed plan are saved on this device.', { exact: true })).toBeVisible();
+  await page.reload(); await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled(); await expect(page.getByRole('heading', { name: 'Garden Table', exact: true })).toBeVisible();
 });
 
 test('conflicting dietary rules remain strict even without a feasible draft', async ({ page }) => {
