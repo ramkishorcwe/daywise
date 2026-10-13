@@ -12,7 +12,7 @@ const referenceSchema = z.discriminatedUnion('kind', [z.strictObject({ kind: z.l
 export const savedLiveDaySchema = z.strictObject({
   version: z.literal(1), id: z.string().uuid(), title: z.string().trim().min(1).max(160), updatedAt: z.iso.datetime(),
   destination: providerPlaceId, start: referenceSchema, end: referenceSchema.nullable(), returnToStart: z.boolean(),
-  stops: z.array(z.strictObject({ location: referenceSchema, durationMinutes: z.number().int().min(0).max(480) })).min(1).max(5),
+  stops: z.array(z.strictObject({ location: referenceSchema, durationMinutes: z.number().int().min(0).max(480) })).min(1).max(7),
   date: z.iso.date(), startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), optimize: z.boolean(),
   adults: z.number().int().min(1).max(12), childAges: z.array(z.number().int().min(0).max(17)).max(11), budget: z.string().regex(/^(?:|\d+(?:\.\d{1,3})?)$/).max(30), currency: z.string().regex(/^(?:|[A-Z]{3})$/), dietaryRules: z.array(z.enum(['vegetarian', 'pure_vegetarian', 'vegan', 'no_onion', 'no_garlic', 'no_root_vegetables'])).max(6),
   expenses: liveExpenseSchema.optional(),

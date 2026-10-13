@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { guideDiscoverSchema, guideCandidateRequestSchema, guidePlanRequestSchema, candidateSchema, guideDiscoverySchema, guidePlanSchema, guideRankingSchema, type GuideCandidate, type GuidePreferences } from '../../../packages/contracts/src/guide';
+import { mealKinds, guideDiscoverSchema, guideCandidateRequestSchema, guidePlanRequestSchema, candidateSchema, guideDiscoverySchema, guidePlanSchema, guideRankingSchema, type GuideCandidate, type GuidePreferences, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../../../packages/contracts/src/guide';
 import { startMatchesDestination, type SelectedLocation } from '../../../packages/contracts/src/locations';
 import { candidateScore, suggestedVisitMinutes, chooseGuideOrder, guideResult } from '../../../packages/domain/src/guide-planner';
 import { liveDeparture } from '../../../packages/domain/src/live-itinerary';
@@ -11,6 +11,7 @@ import type { AssistantService } from './assistant';
 import type { IntentInterpreter } from '../../../packages/data-adapters/src/assistant';
 import type { CheckedCatalog } from '../../../packages/data-adapters/src/catalog';
 import { ApiError } from './errors';
+import { mealSearchAnchors, chooseMealInsertion, validateMealDetours } from '../../../packages/domain/src/meal-planner';
 
 export function registerGuideRoutes(app: FastifyInstance, context: { options: ServerOptions; locations: LocationRegistry; guard: ProviderGuard; owner: (request: FastifyRequest) => string; interpreter: IntentInterpreter; assistant: AssistantService; catalog: CheckedCatalog }) {
   const { options, locations, guard, owner, interpreter, assistant, catalog } = context;
@@ -28,6 +29,45 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     if (reviewed?.openingHours?.date === date) facts.hours = { status: reviewed.openingHours.windows.length ? 'date_specific' : 'closed', windows: reviewed.openingHours.windows, description: ['Independently reviewed date-specific opening evidence.'], source: 'reviewed_catalog', sourceUrl: reviewed.evidence.sourceUrl };
     const candidate = candidateSchema.parse({ location, facts, suggestedMinutes: suggestedVisitMinutes(facts, p), ...candidateScore({ location, facts }, p) });
     records.set(location.id, { owner: who, date, candidate }); return candidate;
+  }
+  async function addMeals(who: string, body: GuidePlanRequest, destination: SelectedLocation, start: SelectedLocation, end: SelectedLocation, originalCandidates: GuideCandidate[], originalOrder: GuideStop[], originalMatrix: TravelMatrix, departure: number) {
+    let order = originalOrder, candidates = originalCandidates, matrix = originalMatrix;
+    for (const kind of mealKinds.filter(kind => body.preferences.meals?.[kind].enabled)) {
+      const source = provider();
+      if (!source.nearbyRestaurants) throw new ApiError(503, 'MEALS_NOT_CONFIGURED', 'Nearby restaurant discovery is unavailable. Configure Places API (New), or turn the requested meal off.');
+      const indices = [0, ...order.map(s => candidates.findIndex(c => c.location.id === s.locationId) + 1), candidates.length + 1];
+      const legs = indices.slice(1).map((to, i) => matrix[indices[i]][to]!);
+      const anchors = mealSearchAnchors(order, candidates, body, destination, legs, kind);
+      if (!anchors.length) throw new ApiError(422, 'MEAL_INFEASIBLE', `No preceding visit leaves time for ${kind}. Adjust the meal window or trip times.`);
+      const groups: GuidePlace[][] = [];
+      const used = new Set(order.map(s => candidates.find(c => c.location.id === s.locationId)!.location.placeId));
+      for (const anchor of anchors) {
+        guard.consume(); const results = await source.nearbyRestaurants(anchor.location.coordinates, body.preferences.meals!.nearbyMeters);
+        groups.push(results.filter(raw => {
+          const facts = factsFor(raw, body.date, destination.timezone!);
+          return !used.has(raw.id) && facts.categories.includes('food') && facts.mealServices?.[kind] !== false && !['unknown', 'closed'].includes(facts.hours.status) && !(body.preferences.mobility === 'wheelchair' && facts.accessible === false) && !(body.preferences.childAges.length && facts.goodForChildren === false) && !(body.preferences.dietaryRules.length && facts.vegetarianOptions === false);
+        }));
+      }
+      // Keep the existing ten-point matrix bound, sharing the shortlist across anchors.
+      const base = order.map(s => candidates.find(c => c.location.id === s.locationId)!);
+      const limit = 10 - base.length - 2, shortlist: GuidePlace[] = [];
+      for (let rank = 0; rank < 8 && shortlist.length < limit; rank++) for (const group of groups) {
+        const raw = group[rank]; if (raw && shortlist.length < limit && !shortlist.some(r => r.id === raw.id)) shortlist.push(raw);
+      }
+      const restaurants: GuideCandidate[] = [];
+      for (const raw of shortlist) {
+        guard.consume(); const reversed = await options.locations!.reverse(raw.location);
+        if (reversed.city?.countryCode !== destination.city!.countryCode) continue;
+        const location = locations.add(who, { ...reversed, provider: 'google', source: 'search', placeId: raw.id, name: raw.displayName.text, address: raw.formattedAddress, coordinates: raw.location, types: raw.types, ...(raw.attributions ? { attributions: raw.attributions } : {}) });
+        restaurants.push(save(who, location, raw, body.date, destination.timezone!, body.preferences));
+      }
+      if (!restaurants.length) throw new ApiError(422, 'MEAL_NOT_FOUND', `No nearby ${kind} restaurant with usable opening hours and location evidence was found. Adjust the meal options or turn this meal off; no restaurant was invented.`);
+      candidates = [...base, ...restaurants];
+      guard.consume(); matrix = await options.liveRoutes!.matrix!([start.coordinates, ...candidates.map(c => c.location.coordinates), end.coordinates], new Date(departure).toISOString(), body.preferences.travelMode);
+      try { order = chooseMealInsertion(order, candidates, restaurants, body, destination, matrix, kind); }
+      catch (error) { throw new ApiError(422, 'MEAL_INFEASIBLE', error instanceof Error ? error.message : 'No nearby meal fits the day.'); }
+    }
+    return { order, candidates, matrix };
   }
   app.post('/api/guide/discover', { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } }, async request => {
     const body = guideDiscoverSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), source = provider();
@@ -54,6 +94,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
   });
   app.post('/api/guide/plan', { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async request => {
     const body = guidePlanRequestSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), start = locations.get(who, body.startId), end = body.returnToStart ? start : locations.get(who, body.endId!);
+    if (body.stops.some(s => s.mealKind)) throw new ApiError(422, 'MEAL_SERVER_SELECTED', 'Request meals through the meal preferences. Restaurants are validated and selected by the server.');
     if (typeof request.headers['idempotency-key'] !== 'string' || !/^[A-Za-z0-9_-]{8,80}$/.test(request.headers['idempotency-key'])) throw new ApiError(400, 'IDEMPOTENCY_REQUIRED', 'Use a fresh valid request key for guide planning.');
     if (!startMatchesDestination(start, destination) && !body.allowOutsideStart) throw new ApiError(422, 'START_CITY_MISMATCH', 'Review and consent to the starting city difference before guide planning.');
     if (!options.liveRoutes?.matrix) throw new ApiError(503, 'GUIDE_ROUTING_NOT_CONFIGURED', 'Configure Google Routes API for real travel-time comparison.');
@@ -77,9 +118,15 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     for (let attempt = 0; attempt < (body.orderMode === 'manual' ? 1 : 2); attempt++) {
       let selected: ReturnType<typeof chooseGuideOrder>;
       try { selected = chooseGuideOrder(body, destination, candidates, matrix, ranking, Date.now(), banned, maxVisits); } catch (error) { throw new ApiError(422, 'GUIDE_INFEASIBLE', error instanceof Error ? error.message : 'No feasible day.'); }
-      guard.consume(); const route = await options.liveRoutes!.itinerary(start.coordinates, end.coordinates, selected.order.map(s => candidates.find(c => c.location.id === s.locationId)!.location.coordinates), new Date(departure).toISOString(), false, undefined, body.preferences.travelMode);
-      try { return guidePlanSchema.parse(guideResult(body, destination, start, end, candidates, selected.order, route, { originalTravelMinutes: selected.originalTravelMinutes, selectedTravelMinutes: route.durationSeconds / 60, evaluatedSequences: selected.evaluated }, mode)); }
-      catch (error) { const indices = [0, ...selected.order.map(s => candidates.findIndex(c => c.location.id === s.locationId) + 1), candidates.length + 1]; route.legs.forEach((leg, i) => { matrix[indices[i]][indices[i + 1]] = { durationSeconds: leg.durationSeconds, distanceMeters: leg.distanceMeters }; }); maxVisits = Math.max(1, selected.order.length - 1); banned.add(selected.order.map(s => s.locationId).join(':')); if (attempt === 1 || body.orderMode === 'manual') throw new ApiError(422, 'GUIDE_FINAL_ROUTE_INFEASIBLE', error instanceof Error ? error.message : 'Final route is infeasible.'); }
+      const final = await addMeals(who, body, destination, start, end, candidates, selected.order, matrix, departure);
+      guard.consume(); const route = await options.liveRoutes!.itinerary(start.coordinates, end.coordinates, final.order.map(s => final.candidates.find(c => c.location.id === s.locationId)!.location.coordinates), new Date(departure).toISOString(), false, undefined, body.preferences.travelMode);
+      try {
+        const result = guideResult(body, destination, start, end, final.candidates, final.order, route, { originalTravelMinutes: selected.originalTravelMinutes, selectedTravelMinutes: route.durationSeconds / 60, evaluatedSequences: selected.evaluated }, mode);
+        const detours = validateMealDetours(final.order, final.candidates, final.matrix, body, route);
+        result.stops.forEach((stop, i) => { if (detours[i]) { stop.mealDetour = detours[i]; stop.reasons.push(stop.facts.mealServices?.[stop.mealKind!] === true ? `Google reports ${stop.mealKind} service; confirm current availability.` : `${stop.mealKind} service is unverified; check directly with the restaurant.`, 'Selected near the preceding visit, with the onward route and meal window checked.', 'Food preparation and meal prices remain unverified; confirm directly with the restaurant.'); } });
+        return guidePlanSchema.parse(result);
+      }
+      catch (error) { if (mealKinds.some(kind => body.preferences.meals?.[kind].enabled)) throw new ApiError(422, 'MEAL_FINAL_ROUTE_INFEASIBLE', error instanceof Error ? error.message : 'The final meal route no longer fits. Adjust the meal options and retry.'); const indices = [0, ...selected.order.map(s => candidates.findIndex(c => c.location.id === s.locationId) + 1), candidates.length + 1]; route.legs.forEach((leg, i) => { matrix[indices[i]][indices[i + 1]] = { durationSeconds: leg.durationSeconds, distanceMeters: leg.distanceMeters }; }); maxVisits = Math.max(1, selected.order.length - 1); banned.add(selected.order.map(s => s.locationId).join(':')); if (attempt === 1 || body.orderMode === 'manual') throw new ApiError(422, 'GUIDE_FINAL_ROUTE_INFEASIBLE', error instanceof Error ? error.message : 'Final route is infeasible.'); }
     }
     throw new ApiError(422, 'GUIDE_FINAL_ROUTE_INFEASIBLE', 'No final Google route fits the available day. Keep your choices and adjust the schedule.');
     });

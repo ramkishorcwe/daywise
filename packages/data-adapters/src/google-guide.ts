@@ -8,10 +8,10 @@ import { ProviderError } from './google';
 const daySchema = z.object({ year: z.number().int(), month: z.number().int(), day: z.number().int() });
 const point = z.object({ day: z.number().int().min(0).max(6).default(0), hour: z.number().int().min(0).max(23).default(0), minute: z.number().int().min(0).max(59).default(0), date: daySchema.optional(), truncated: z.boolean().optional() });
 const hoursSchema = z.object({ periods: z.array(z.object({ open: point, close: point.optional() })).max(30).optional(), weekdayDescriptions: z.array(z.string()).optional() });
-export const guidePlaceSchema = z.object({ id: providerPlaceId, displayName: z.object({ text: z.string().min(1).max(300) }), formattedAddress: z.string().min(1).max(1000), location: coordinateSchema, types: z.array(z.string()), businessStatus: z.string().optional(), rating: z.number().optional(), userRatingCount: z.number().int().optional(), currentOpeningHours: hoursSchema.optional(), regularOpeningHours: hoursSchema.optional(), accessibilityOptions: z.object({ wheelchairAccessibleEntrance: z.boolean().optional() }).optional(), goodForChildren: z.boolean().optional(), servesVegetarianFood: z.boolean().optional(), websiteUri: z.url().optional(), googleMapsUri: z.url().optional(), editorialSummary: z.object({ text: z.string().max(2500) }).optional(), containingPlaces: z.array(z.object({ id: providerPlaceId })).max(10).optional(), attributions: z.array(z.object({ provider: z.string(), providerUri: z.url().optional() })).optional() });
+export const guidePlaceSchema = z.object({ id: providerPlaceId, displayName: z.object({ text: z.string().min(1).max(300) }), formattedAddress: z.string().min(1).max(1000), location: coordinateSchema, types: z.array(z.string()), businessStatus: z.string().optional(), rating: z.number().optional(), userRatingCount: z.number().int().optional(), currentOpeningHours: hoursSchema.optional(), regularOpeningHours: hoursSchema.optional(), accessibilityOptions: z.object({ wheelchairAccessibleEntrance: z.boolean().optional() }).optional(), goodForChildren: z.boolean().optional(), servesVegetarianFood: z.boolean().optional(), servesLunch: z.boolean().optional(), servesDinner: z.boolean().optional(), websiteUri: z.url().optional(), googleMapsUri: z.url().optional(), editorialSummary: z.object({ text: z.string().max(2500) }).optional(), containingPlaces: z.array(z.object({ id: providerPlaceId })).max(10).optional(), attributions: z.array(z.object({ provider: z.string(), providerUri: z.url().optional() })).optional() });
 export type GuidePlace = z.infer<typeof guidePlaceSchema>;
-export interface GuidePlacesProvider { discover(city: string, center: Coordinate, preferences: GuidePreferences): Promise<GuidePlace[]>; facts(placeId: string): Promise<GuidePlace> }
-const fields = ['id', 'displayName', 'formattedAddress', 'location', 'types', 'businessStatus', 'rating', 'userRatingCount', 'currentOpeningHours', 'regularOpeningHours', 'accessibilityOptions', 'goodForChildren', 'servesVegetarianFood', 'websiteUri', 'googleMapsUri', 'editorialSummary', 'containingPlaces', 'attributions'];
+export interface GuidePlacesProvider { discover(city: string, center: Coordinate, preferences: GuidePreferences): Promise<GuidePlace[]>; facts(placeId: string): Promise<GuidePlace>; nearbyRestaurants?(center: Coordinate, radiusMeters: number): Promise<GuidePlace[]> }
+const fields = ['id', 'displayName', 'formattedAddress', 'location', 'types', 'businessStatus', 'rating', 'userRatingCount', 'currentOpeningHours', 'regularOpeningHours', 'accessibilityOptions', 'goodForChildren', 'servesVegetarianFood', 'servesLunch', 'servesDinner', 'websiteUri', 'googleMapsUri', 'editorialSummary', 'containingPlaces', 'attributions'];
 export class GoogleGuidePlaces implements GuidePlacesProvider {
   constructor(private key: string, private request: typeof fetch = fetch) {}
   private async json(url: string, init: RequestInit) {
@@ -33,6 +33,18 @@ export class GoogleGuidePlaces implements GuidePlacesProvider {
     const parsed = guidePlaceSchema.safeParse(raw);
     if (!parsed.success || parsed.data.id !== placeId) throw new ProviderError('INVALID_RESPONSE', 'The selected place has incomplete guide information.');
     return parsed.data;
+  }
+  async nearbyRestaurants(center: Coordinate, radiusMeters: number) {
+    if (!this.key) throw new ProviderError('NOT_CONFIGURED', 'Configure the Places API (New) server key for restaurant suggestions.');
+    const raw = await this.json('https://places.googleapis.com/v1/places:searchNearby', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': this.key, 'X-Goog-FieldMask': fields.map(f => `places.${f}`).join(',') }, body: JSON.stringify({ includedTypes: ['restaurant'], maxResultCount: 8, rankPreference: 'DISTANCE', languageCode: 'en', locationRestriction: { circle: { center: coordinateSchema.parse(center), radius: z.number().min(100).max(3000).parse(radiusMeters) } } }) });
+    const result = z.object({ places: z.array(z.unknown()).max(20).optional() }).safeParse(raw);
+    if (!result.success) throw new ProviderError('INVALID_RESPONSE', 'Google returned incomplete nearby restaurant results.');
+    const seen = new Set<string>();
+    return (result.data.places ?? []).flatMap(item => {
+      const place = guidePlaceSchema.safeParse(item);
+      if (!place.success || seen.has(place.data.id) || !place.data.types.some(t => t === 'restaurant' || t.endsWith('_restaurant')) || ['CLOSED_PERMANENTLY', 'CLOSED_TEMPORARILY'].includes(place.data.businessStatus ?? '')) return [];
+      seen.add(place.data.id); return [place.data];
+    });
   }
 }
 const addDays = (date: string, count: number) => new Date(Date.parse(`${date}T12:00:00Z`) + count * 86400000).toISOString().slice(0, 10);
@@ -68,5 +80,5 @@ export function factsFor(place: GuidePlace, date: string, timezone: string): Gui
   const rules: Array<[GuideFacts['categories'][number], RegExp]> = [['forts', /\bfort\b|castle/], ['palaces', /palace/], ['history', /historical|monument|\bfort\b|palace|museum/], ['culture', /tourist_attraction|cultural|heritage/], ['temples', /temple|place_of_worship/], ['shopping', /market|bazaar|shopping/], ['nature', /\bpark\b|natural|lake|wildlife/], ['gardens', /garden|\bpark\b/], ['museums', /museum/], ['food', /restaurant|cafe|food/], ['nightlife', /night_club|\bbar\b/]];
   for (const [category, pattern] of rules) if (pattern.test(text)) categories.push(category);
   const environment = /museum|art_gallery/.test(place.types.join(' ')) ? 'indoor' : /\bpark\b|garden|natural_feature/.test(place.types.join(' ')) ? 'outdoor' : 'unknown';
-  return { containingPlaceIds: place.containingPlaces?.map(p => p.id) ?? [], categories, environment, rating: place.rating ?? null, reviews: place.userRatingCount ?? null, hours: openingWindows(place, date, timezone), admission: null, accessible: place.accessibilityOptions?.wheelchairAccessibleEntrance ?? null, goodForChildren: place.goodForChildren ?? null, vegetarianOptions: place.servesVegetarianFood ?? null, website: place.websiteUri ?? null, providerUri: place.googleMapsUri ?? null, description: place.editorialSummary?.text ?? null, checkedAt: new Date().toISOString() };
+  return { mealServices: { lunch: place.servesLunch ?? null, dinner: place.servesDinner ?? null }, containingPlaceIds: place.containingPlaces?.map(p => p.id) ?? [], categories, environment, rating: place.rating ?? null, reviews: place.userRatingCount ?? null, hours: openingWindows(place, date, timezone), admission: null, accessible: place.accessibilityOptions?.wheelchairAccessibleEntrance ?? null, goodForChildren: place.goodForChildren ?? null, vegetarianOptions: place.servesVegetarianFood ?? null, website: place.websiteUri ?? null, providerUri: place.googleMapsUri ?? null, description: place.editorialSummary?.text ?? null, checkedAt: new Date().toISOString() };
 }

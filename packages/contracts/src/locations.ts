@@ -37,13 +37,13 @@ export const liveRouteInputSchema = z.strictObject({
 }).refine(value => value.returnToStart || !!value.endId, 'Choose a return location.');
 export type LiveRouteInput = z.infer<typeof liveRouteInputSchema>;
 export const liveRouteSchema = routeEstimateSchema.extend({
-  legs: z.array(z.strictObject({ durationSeconds: z.number().finite().nonnegative(), distanceMeters: z.number().finite().nonnegative() })).min(2).max(6),
-  optimizedOrder: z.array(z.number().int().min(0).max(4)).min(1).max(5),
+  legs: z.array(z.strictObject({ durationSeconds: z.number().finite().nonnegative(), distanceMeters: z.number().finite().nonnegative() })).min(2).max(8),
+  optimizedOrder: z.array(z.number().int().min(0).max(6)).min(1).max(7),
 });
 export type LiveRoute = z.infer<typeof liveRouteSchema>;
 export const liveItinerarySchema = z.strictObject({
   route: liveRouteSchema, destination: locationSchema, start: locationSchema, end: locationSchema,
-  stops: z.array(z.strictObject({ location: locationSchema, durationMinutes: z.number().int().min(0).max(480), arrivalAt: z.iso.datetime(), departureAt: z.iso.datetime() })).min(1).max(5),
+  stops: z.array(z.strictObject({ location: locationSchema, durationMinutes: z.number().int().min(0).max(480), arrivalAt: z.iso.datetime(), departureAt: z.iso.datetime() })).min(1).max(7),
   finishAt: z.iso.datetime(), deadlineAt: z.iso.datetime(), withinTime: z.boolean(), warnings: z.array(z.string()).max(12),
 });
 export type LiveItinerary = z.infer<typeof liveItinerarySchema>;
