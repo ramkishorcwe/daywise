@@ -148,6 +148,19 @@ it('skips the meal for morning, evening and early-finishing tours without making
   }
 });
 
+it('uses the actual starting point for a midday meal when the first visit would finish after the meal window', async () => {
+  const a = await mealApi(); a.body.startTime = '13:30'; a.body.endTime = '17:00';
+  const source = await a.post('/api/locations/reverse', { coordinates: { latitude: 51.012, longitude: 0.001 }, source: 'pin' });
+  expect(source.statusCode).toBe(200); a.body.startId = source.json<SelectedLocation>().id;
+  a.body.stops = a.body.stops.slice(0, 1); a.body.stops[0].durationMinutes = 75;
+  const response = await a.post('/api/guide/plan', a.body);
+  expect(response.statusCode, response.body).toBe(200);
+  const plan = response.json(); expect(plan.stops[0].mealKind).toBe('lunch');
+  expect(plan.itinerary.stops[0].arrivalAt).toBe(`${date}T13:32:00.000Z`);
+  expect(plan.stops[0].mealDetour.fromPreviousMeters).toBe(600);
+  expect(a.nearbyRestaurants.mock.calls[0][0]).toEqual(a.routeCall.mock.calls[0][0]);
+});
+
 it('restaurant provider failures and missing hours are actionable and never become invented meals', async () => {
   const a = await mealApi(async () => { throw new Error('Test provider unavailable'); });
   const response = await a.post('/api/guide/plan', a.body);

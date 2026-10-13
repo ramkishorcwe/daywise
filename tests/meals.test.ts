@@ -42,10 +42,10 @@ it('rejects distant, closed, unknown-hours and explicitly incompatible restauran
   for (const failure of ['far', 'closed', 'unknown', 'food', 'missing', 'service'] as const) {
     const a = setup();
     if (failure === 'service') a.candidates[2].facts.mealServices = { lunch: false, dinner: true };
-    if (failure === 'far') { a.matrix[1][3]!.distanceMeters = 4000; a.matrix[2][3]!.distanceMeters = 4000; }
+    if (failure === 'far') { a.matrix[0][3]!.distanceMeters = 4000; a.matrix[1][3]!.distanceMeters = 4000; a.matrix[2][3]!.distanceMeters = 4000; }
     if (failure === 'closed' || failure === 'unknown') a.candidates[2].facts.hours.status = failure;
     if (failure === 'food') { a.input.preferences.dietaryRules = ['vegetarian']; a.candidates[2].facts.vegetarianOptions = false; }
-    if (failure === 'missing') { a.matrix[1][3] = null; a.matrix[2][3] = null; }
+    if (failure === 'missing') { a.matrix[0][3] = null; a.matrix[1][3] = null; a.matrix[2][3] = null; }
     expect(() => chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch')).toThrow('No nearby meal');
   }
 });

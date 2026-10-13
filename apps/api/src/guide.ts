@@ -42,7 +42,8 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
       if (!source.nearbyRestaurants) throw new ApiError(503, 'MEALS_NOT_CONFIGURED', 'Nearby restaurant discovery is unavailable. Configure Places API (New), or turn the requested meal off.');
       const indices = [0, ...order.map(s => candidates.findIndex(c => c.location.id === s.locationId) + 1), candidates.length + 1];
       const legs = indices.slice(1).map((to, i) => matrix[indices[i]][to]!);
-      const anchors = mealSearchAnchors(order, candidates, body, destination, legs, kind);
+      const priorVisits = mealSearchAnchors(order, candidates, body, destination, legs, kind);
+      const anchors = priorVisits.length ? priorVisits : [{ location: start }];
       if (!anchors.length) throw new ApiError(422, 'MEAL_INFEASIBLE', 'No preceding visit leaves time for the midday meal. Adjust visit durations or trip times, or uncheck Include meal.');
       const groups: GuidePlace[][] = [];
       const used = new Set(order.map(s => candidates.find(c => c.location.id === s.locationId)!.location.placeId));
@@ -128,7 +129,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
       try {
         const result = guideResult(body, destination, start, end, final.candidates, final.order, route, { originalTravelMinutes: selected.originalTravelMinutes, selectedTravelMinutes: route.durationSeconds / 60, evaluatedSequences: selected.evaluated }, mode);
         const detours = validateMealDetours(final.order, final.candidates, final.matrix, body, route);
-        result.stops.forEach((stop, i) => { if (detours[i]) { stop.mealDetour = detours[i]; stop.reasons.push(stop.facts.mealServices?.[stop.mealKind!] === true ? `Google reports ${stop.mealKind} service; confirm current availability.` : `${stop.mealKind} service is unverified; check directly with the restaurant.`, 'Selected near the preceding visit, with the onward route and meal window checked.', 'Food preparation and meal prices remain unverified; confirm directly with the restaurant.'); } });
+        result.stops.forEach((stop, i) => { if (detours[i]) { stop.mealDetour = detours[i]; stop.reasons.push(stop.facts.mealServices?.[stop.mealKind!] === true ? `Google reports ${stop.mealKind} service; confirm current availability.` : `${stop.mealKind} service is unverified; check directly with the restaurant.`, i === 0 ? 'Selected near your actual starting location before the first visit; onward travel and meal timing were checked.' : 'Selected near the preceding visit, with the onward route and meal timing checked.', 'Food preparation and meal prices remain unverified; confirm directly with the restaurant.'); } });
         return guidePlanSchema.parse(result);
       }
       catch (error) { if (middayMealRequested(body)) throw new ApiError(422, 'MEAL_FINAL_ROUTE_INFEASIBLE', error instanceof Error ? error.message : 'The final meal route no longer fits. Adjust the meal options and retry.'); const indices = [0, ...selected.order.map(s => candidates.findIndex(c => c.location.id === s.locationId) + 1), candidates.length + 1]; route.legs.forEach((leg, i) => { matrix[indices[i]][indices[i + 1]] = { durationSeconds: leg.durationSeconds, distanceMeters: leg.distanceMeters }; }); maxVisits = Math.max(1, selected.order.length - 1); banned.add(selected.order.map(s => s.locationId).join(':')); if (attempt === 1 || body.orderMode === 'manual') throw new ApiError(422, 'GUIDE_FINAL_ROUTE_INFEASIBLE', error instanceof Error ? error.message : 'Final route is infeasible.'); }
