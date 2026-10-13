@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { defaultMealPreferences, guidePreferencesSchema, type GuideCandidate, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../packages/contracts/src/guide';
 import type { LiveRoute, SelectedLocation } from '../packages/contracts/src/locations';
 import { chooseMealInsertion, validateMealDetours } from '../packages/domain/src/meal-planner';
-import { budgetFor, scheduleGuide } from '../packages/domain/src/guide-planner';
+import { budgetFor, scheduleGuide, middayMealDue, middayMealRequested } from '../packages/domain/src/guide-planner';
 import { GoogleGuidePlaces } from '../packages/data-adapters/src/google-guide';
 
 // Provider fixtures are restricted to tests. Production meals require provider receipts.
@@ -14,8 +14,8 @@ function setup() {
   const candidates = [place('museum'), place('gallery'), place('nearby-food', true), place('distant-food', true)];
   const choice = (c: GuideCandidate): GuideStop => ({ locationId: c.location.id, durationMinutes: 30, mustVisit: false, locked: false, preferredTime: null, costEstimate: null });
   const order = candidates.slice(0, 2).map(choice);
-  const preferences = guidePreferencesSchema.parse({ adults: 2, childAges: [], groupBudget: null, currency: 'USD', dietaryRules: [], bufferMinutes: 0, mealBreak: true, restBreaks: false, meals: { ...structuredClone(defaultMealPreferences), lunch: { enabled: true, startTime: '12:00', endTime: '14:00', durationMinutes: 45 } } });
-  const input: GuidePlanRequest = { destinationId: randomUUID(), startId: randomUUID(), endId: null, returnToStart: true, allowOutsideStart: false, date, startTime: '11:00', endTime: '21:00', preferences, orderMode: 'manual', stops: order };
+  const preferences = guidePreferencesSchema.parse({ adults: 2, childAges: [], groupBudget: null, currency: 'USD', dietaryRules: [], bufferMinutes: 0, mealBreak: true, restBreaks: false, meals: { ...structuredClone(defaultMealPreferences), lunch: { enabled: true, startTime: '13:00', endTime: '14:00', durationMinutes: 45 } } });
+  const input: GuidePlanRequest = { destinationId: randomUUID(), startId: randomUUID(), endId: null, returnToStart: true, allowOutsideStart: false, date, startTime: '12:00', endTime: '21:00', preferences, orderMode: 'manual', stops: order };
   const matrix: TravelMatrix = Array.from({ length: candidates.length + 2 }, (_, i) => Array.from({ length: candidates.length + 2 }, (_, j) => ({ durationSeconds: i === j ? 0 : 120, distanceMeters: i === j ? 0 : 400 })));
   return { candidates, order, input, matrix, destination: candidates[0].location as SelectedLocation };
 }
@@ -26,8 +26,8 @@ it('inserts a timed nearby lunch without changing attraction order or duplicatin
   const indices = [0, ...order.map(s => a.candidates.findIndex(c => c.location.id === s.locationId) + 1), a.candidates.length + 1];
   const schedule = scheduleGuide(order, a.candidates, a.input, a.destination, indices.slice(1).map((to, i) => a.matrix[indices[i]][to]!), Date.parse(at('00:00')))!;
   const meal = schedule.rows.find(r => r.stop.mealKind)!;
-  expect(meal.arrival).toBeGreaterThanOrEqual(Date.parse(at('12:00')));
-  expect(meal.departure).toBeLessThanOrEqual(Date.parse(at('14:00')));
+  expect(meal.arrival).toBeGreaterThanOrEqual(Date.parse(at('13:00')));
+  expect(meal.arrival).toBeLessThanOrEqual(Date.parse(at('14:00')));
   expect(meal.stop.durationMinutes).toBe(45);
   expect(schedule.breaks.filter(b => b.kind === 'meal')).toEqual([]);
 });
@@ -46,7 +46,7 @@ it('rejects distant, closed, unknown-hours and explicitly incompatible restauran
     if (failure === 'closed' || failure === 'unknown') a.candidates[2].facts.hours.status = failure;
     if (failure === 'food') { a.input.preferences.dietaryRules = ['vegetarian']; a.candidates[2].facts.vegetarianOptions = false; }
     if (failure === 'missing') { a.matrix[1][3] = null; a.matrix[2][3] = null; }
-    expect(() => chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch')).toThrow('No lunch');
+    expect(() => chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch')).toThrow('No nearby meal');
   }
 });
 
@@ -57,7 +57,7 @@ it('respects the next visit closing time, explicit appointment and return deadli
     if (failure === 'closing') a.candidates[2].facts.hours.windows[0].closes = at('13:30');
     if (failure === 'appointment') { a.candidates[1].facts.hours.windows[0].closes = at('13:00'); a.input.preferences.meals!.lunch.startTime = '12:00'; a.input.preferences.meals!.lunch.endTime = '13:00'; }
     if (failure === 'deadline') a.input.endTime = '13:30';
-    expect(() => chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch')).toThrow('No lunch');
+    expect(() => chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch')).toThrow('No nearby meal');
   }
 });
 
@@ -68,16 +68,26 @@ it('Any food retains unknown preparation honestly, and the group meal budget is 
   const budget = budgetFor(order, a.candidates, a.input.preferences);
   expect(budget.groupKnownMaximum).toBe(80); expect(budget.status).toBe('unknown');
   a.input.preferences.groupBudget = 50;
-  expect(() => chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch')).toThrow('No lunch');
+  expect(() => chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch')).toThrow('No nearby meal');
 });
 
-it('supports both meals with their own windows and durations, including dinner after the last visit', () => {
-  const a = setup(); a.input.preferences.meals!.dinner.enabled = true;
-  const lunch = chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch');
-  const both = chooseMealInsertion(lunch, a.candidates, [a.candidates[3]], a.input, a.destination, a.matrix, 'dinner');
-  expect(both.filter(s => s.mealKind).map(s => s.mealKind)).toEqual(['lunch', 'dinner']);
-  expect(both.filter(s => !s.mealKind)).toEqual(a.order);
-  expect(both.find(s => s.mealKind === 'dinner')!.durationMinutes).toBe(60);
+it('defaults to one meal and safely removes legacy dinner preferences when saved days are read', () => {
+  const preferences = guidePreferencesSchema.parse({ adults: 2, childAges: [], groupBudget: null, currency: null, dietaryRules: [], meals: { ...defaultMealPreferences, dinner: { enabled: true, startTime: '18:00', endTime: '21:00', durationMinutes: 60 } } });
+  expect(preferences.mealBreak).toBe(true); expect(preferences.meals.lunch.enabled).toBe(true);
+  expect(preferences.meals.lunch.startTime).toBe('13:00'); expect(preferences.meals.lunch.endTime).toBe('14:00');
+  expect(preferences.meals).not.toHaveProperty('dinner');
+});
+
+it('only requests a meal for an enabled itinerary that actually reaches midday', () => {
+  const a = setup();
+  expect(middayMealDue(a.input, a.destination, Date.parse(at('13:10')))).toBe(true);
+  expect(middayMealDue(a.input, a.destination, Date.parse(at('12:59')))).toBe(false);
+  a.input.preferences.mealBreak = false;
+  expect(middayMealRequested(a.input)).toBe(false);
+  a.input.preferences.mealBreak = true; a.input.startTime = '16:00';
+  expect(middayMealRequested(a.input)).toBe(false);
+  a.input.startTime = '09:00'; a.input.endTime = '12:00';
+  expect(middayMealRequested(a.input)).toBe(false);
 });
 
 it('retains known restaurant entry charges alongside the group food allowance and enforces the budget', () => {
@@ -86,7 +96,7 @@ it('retains known restaurant entry charges alongside the group food allowance an
   const order = chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch');
   expect(budgetFor(order, a.candidates, a.input.preferences).groupKnownMaximum).toBe(110);
   a.input.preferences.groupBudget = 100;
-  expect(() => chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch')).toThrow('No lunch');
+  expect(() => chooseMealInsertion(a.order, a.candidates, [a.candidates[2]], a.input, a.destination, a.matrix, 'lunch')).toThrow('No nearby meal');
 });
 
 it('rechecks detour limits against the final Google route rather than accepting a stale matrix estimate', () => {

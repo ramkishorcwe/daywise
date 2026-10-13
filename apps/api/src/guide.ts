@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { mealKinds, guideDiscoverSchema, guideCandidateRequestSchema, guidePlanRequestSchema, candidateSchema, guideDiscoverySchema, guidePlanSchema, guideRankingSchema, type GuideCandidate, type GuidePreferences, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../../../packages/contracts/src/guide';
 import { startMatchesDestination, type SelectedLocation } from '../../../packages/contracts/src/locations';
-import { candidateScore, suggestedVisitMinutes, chooseGuideOrder, guideResult } from '../../../packages/domain/src/guide-planner';
+import { candidateScore, suggestedVisitMinutes, chooseGuideOrder, guideResult, middayMealDue, middayMealRequested, scheduleGuide } from '../../../packages/domain/src/guide-planner';
 import { liveDeparture } from '../../../packages/domain/src/live-itinerary';
 import { factsFor, type GuidePlacesProvider, type GuidePlace } from '../../../packages/data-adapters/src/google-guide';
 import type { ServerOptions } from './server';
@@ -32,13 +32,18 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
   }
   async function addMeals(who: string, body: GuidePlanRequest, destination: SelectedLocation, start: SelectedLocation, end: SelectedLocation, originalCandidates: GuideCandidate[], originalOrder: GuideStop[], originalMatrix: TravelMatrix, departure: number) {
     let order = originalOrder, candidates = originalCandidates, matrix = originalMatrix;
-    for (const kind of mealKinds.filter(kind => body.preferences.meals?.[kind].enabled)) {
+    if (!middayMealRequested(body)) return { order, candidates, matrix };
+    const originalIndices = [0, ...order.map(s => candidates.findIndex(c => c.location.id === s.locationId) + 1), candidates.length + 1];
+    const originalLegs = originalIndices.slice(1).map((to, i) => matrix[originalIndices[i]][to]!);
+    const originalSchedule = scheduleGuide(order, candidates, body, destination, originalLegs);
+    if (!originalSchedule || !middayMealDue(body, destination, originalSchedule.finish)) return { order, candidates, matrix };
+    for (const kind of mealKinds) {
       const source = provider();
       if (!source.nearbyRestaurants) throw new ApiError(503, 'MEALS_NOT_CONFIGURED', 'Nearby restaurant discovery is unavailable. Configure Places API (New), or turn the requested meal off.');
       const indices = [0, ...order.map(s => candidates.findIndex(c => c.location.id === s.locationId) + 1), candidates.length + 1];
       const legs = indices.slice(1).map((to, i) => matrix[indices[i]][to]!);
       const anchors = mealSearchAnchors(order, candidates, body, destination, legs, kind);
-      if (!anchors.length) throw new ApiError(422, 'MEAL_INFEASIBLE', `No preceding visit leaves time for ${kind}. Adjust the meal window or trip times.`);
+      if (!anchors.length) throw new ApiError(422, 'MEAL_INFEASIBLE', 'No preceding visit leaves time for the midday meal. Adjust visit durations or trip times, or uncheck Include meal.');
       const groups: GuidePlace[][] = [];
       const used = new Set(order.map(s => candidates.find(c => c.location.id === s.locationId)!.location.placeId));
       for (const anchor of anchors) {
@@ -61,7 +66,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
         const location = locations.add(who, { ...reversed, provider: 'google', source: 'search', placeId: raw.id, name: raw.displayName.text, address: raw.formattedAddress, coordinates: raw.location, types: raw.types, ...(raw.attributions ? { attributions: raw.attributions } : {}) });
         restaurants.push(save(who, location, raw, body.date, destination.timezone!, body.preferences));
       }
-      if (!restaurants.length) throw new ApiError(422, 'MEAL_NOT_FOUND', `No nearby ${kind} restaurant with usable opening hours and location evidence was found. Adjust the meal options or turn this meal off; no restaurant was invented.`);
+      if (!restaurants.length) throw new ApiError(422, 'MEAL_NOT_FOUND', 'No nearby restaurant with usable opening hours and location evidence was found. Adjust the meal settings or uncheck Include meal; no restaurant was invented.');
       candidates = [...base, ...restaurants];
       guard.consume(); matrix = await options.liveRoutes!.matrix!([start.coordinates, ...candidates.map(c => c.location.coordinates), end.coordinates], new Date(departure).toISOString(), body.preferences.travelMode);
       try { order = chooseMealInsertion(order, candidates, restaurants, body, destination, matrix, kind); }
@@ -126,7 +131,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
         result.stops.forEach((stop, i) => { if (detours[i]) { stop.mealDetour = detours[i]; stop.reasons.push(stop.facts.mealServices?.[stop.mealKind!] === true ? `Google reports ${stop.mealKind} service; confirm current availability.` : `${stop.mealKind} service is unverified; check directly with the restaurant.`, 'Selected near the preceding visit, with the onward route and meal window checked.', 'Food preparation and meal prices remain unverified; confirm directly with the restaurant.'); } });
         return guidePlanSchema.parse(result);
       }
-      catch (error) { if (mealKinds.some(kind => body.preferences.meals?.[kind].enabled)) throw new ApiError(422, 'MEAL_FINAL_ROUTE_INFEASIBLE', error instanceof Error ? error.message : 'The final meal route no longer fits. Adjust the meal options and retry.'); const indices = [0, ...selected.order.map(s => candidates.findIndex(c => c.location.id === s.locationId) + 1), candidates.length + 1]; route.legs.forEach((leg, i) => { matrix[indices[i]][indices[i + 1]] = { durationSeconds: leg.durationSeconds, distanceMeters: leg.distanceMeters }; }); maxVisits = Math.max(1, selected.order.length - 1); banned.add(selected.order.map(s => s.locationId).join(':')); if (attempt === 1 || body.orderMode === 'manual') throw new ApiError(422, 'GUIDE_FINAL_ROUTE_INFEASIBLE', error instanceof Error ? error.message : 'Final route is infeasible.'); }
+      catch (error) { if (middayMealRequested(body)) throw new ApiError(422, 'MEAL_FINAL_ROUTE_INFEASIBLE', error instanceof Error ? error.message : 'The final meal route no longer fits. Adjust the meal options and retry.'); const indices = [0, ...selected.order.map(s => candidates.findIndex(c => c.location.id === s.locationId) + 1), candidates.length + 1]; route.legs.forEach((leg, i) => { matrix[indices[i]][indices[i + 1]] = { durationSeconds: leg.durationSeconds, distanceMeters: leg.distanceMeters }; }); maxVisits = Math.max(1, selected.order.length - 1); banned.add(selected.order.map(s => s.locationId).join(':')); if (attempt === 1 || body.orderMode === 'manual') throw new ApiError(422, 'GUIDE_FINAL_ROUTE_INFEASIBLE', error instanceof Error ? error.message : 'Final route is infeasible.'); }
     }
     throw new ApiError(422, 'GUIDE_FINAL_ROUTE_INFEASIBLE', 'No final Google route fits the available day. Keep your choices and adjust the schedule.');
     });

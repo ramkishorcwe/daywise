@@ -1,4 +1,3 @@
-import { mealKinds } from '../../contracts/src/guide';
 import type { GuideCandidate, GuidePreferences, GuideStop, GuidePlanRequest, TravelMatrix, GuidePlan } from '../../contracts/src/guide';
 import type { SelectedLocation, LiveRoute } from '../../contracts/src/locations';
 import { liveDeparture } from './live-itinerary';
@@ -53,16 +52,16 @@ export function budgetFor(stops: GuideStop[], candidates: GuideCandidate[], p: G
   return { currency: p.currency, groupKnownMinimum: minimum, groupKnownMaximum: maximum, perPersonKnownMinimum: minimum / people, perPersonKnownMaximum: maximum / people, groupLimit: limit, unknowns, status: limit !== null && maximum > limit ? 'over' : unknowns.length ? 'unknown' : 'within_estimates' };
 }
 type Schedule = { rows: Array<{ candidate: GuideCandidate; stop: GuideStop; arrival: number; departure: number; travel: number; wait: number }>; breaks: GuidePlan['breaks']; finish: number; travelSeconds: number; distance: number };
-type Timing = ReturnType<typeof liveDeparture> & { lunchStart: number; lunchEnd: number; appointments: Map<string, number> };
+export const middayMealRequested = (input: GuidePlanRequest) => input.preferences.mealBreak && input.startTime < '14:00' && input.endTime > '13:00';
+export const middayMealDue = (input: GuidePlanRequest, destination: SelectedLocation, finish: number) => middayMealRequested(input) && finish > zonedTime(input.date, '13:00', destination.timezone!);
+
+type Timing = ReturnType<typeof liveDeparture> & { lunchStart: number; appointments: Map<string, number> };
 export function scheduleGuide(order: GuideStop[], candidates: GuideCandidate[], input: GuidePlanRequest, destination: SelectedLocation, legs: Array<{ durationSeconds: number; distanceMeters: number }>, now = Date.now(), timing?: Timing): Schedule | null {
   const { departure, deadline } = timing ?? liveDeparture(input, destination, now), p = input.preferences;
   if (legs.length !== order.length + 1) return null;
-  let cursor = departure, travelSeconds = 0, distance = 0, lastBreak = departure, mealTaken = false;
-  const explicitMeals = mealKinds.filter(kind => p.meals?.[kind].enabled);
-  const personalMeal = p.mealBreak && !explicitMeals.length;
-  const missingMealAllowance = explicitMeals.filter(kind => !order.some(s => s.mealKind === kind)).reduce((sum, kind) => sum + p.meals![kind].durationMinutes + p.bufferMinutes + p.meals!.maxExtraMinutes, 0);
+  let cursor = departure, travelSeconds = 0, distance = 0, lastBreak = departure;
   const rows: Schedule['rows'] = [], breaks: GuidePlan['breaks'] = [];
-  const lunchStart = timing?.lunchStart ?? zonedTime(input.date, '12:00', destination.timezone!), lunchEnd = timing?.lunchEnd ?? zonedTime(input.date, '15:00', destination.timezone!);
+  const lunchStart = timing?.lunchStart ?? zonedTime(input.date, '13:00', destination.timezone!);
   for (let i = 0; i < order.length; i++) {
     const stop = order[i], candidate = candidates.find(c => c.location.id === stop.locationId)!;
     if (!candidate || candidate.facts.hours.status === 'closed') return null;
@@ -73,7 +72,7 @@ export function scheduleGuide(order: GuideStop[], candidates: GuideCandidate[], 
     const reached = cursor, duration = stop.durationMinutes * 60000;
     if (stop.preferredTime) { const appointment = timing?.appointments.get(stop.locationId) ?? zonedTime(input.date, stop.preferredTime, destination.timezone!); if (cursor > appointment) return null; cursor = appointment; }
     const hours = candidate.facts.hours;
-    const meal = stop.mealKind ? p.meals?.[stop.mealKind] : undefined;
+    const meal = stop.mealKind === 'lunch' && middayMealRequested(input) ? p.meals?.lunch : undefined;
     const mealEnd = meal ? zonedTime(input.date, meal.endTime, destination.timezone!) : Infinity;
     if (stop.mealKind) {
       if (!meal?.enabled || candidate.facts.mealServices?.[stop.mealKind] === false || hours.status === 'unknown' || !candidate.facts.categories.includes('food') || (p.dietaryRules.some(r => ['vegetarian', 'pure_vegetarian', 'vegan', 'no_onion', 'no_garlic', 'no_root_vegetables'].includes(r)) && candidate.facts.vegetarianOptions === false)) return null;
@@ -85,25 +84,22 @@ export function scheduleGuide(order: GuideStop[], candidates: GuideCandidate[], 
       const entry = Math.max(cursor, Date.parse(slot.opens)); if (stop.preferredTime && entry !== cursor) return null; cursor = entry;
     }
     const arrival = cursor; cursor += duration;
-    if (cursor > mealEnd) return null;
+    if (arrival > mealEnd) return null;
     rows.push({ candidate, stop, arrival, departure: cursor, travel: leg.durationSeconds / 60, wait: (arrival - reached) / 60000 });
-    if (candidate.facts.categories.includes('food')) { mealTaken = true; lastBreak = cursor; }
-    const addBreak = (kind: 'meal' | 'rest', minutes: number) => { const starts = new Date(cursor).toISOString(); cursor += minutes * 60000; breaks.push({ kind, afterLocationId: candidate.location.id, starts, ends: new Date(cursor).toISOString(), note: kind === 'meal' ? 'Personal meal break near the preceding stop. No restaurant, preparation or meal price is verified.' : 'Personal rest break; a seat, restroom and accessible facilities are not confirmed.' }); lastBreak = cursor; };
-    if (personalMeal && !mealTaken && deadline - departure >= 5 * 3600000 && cursor >= lunchStart && cursor <= lunchEnd) { addBreak('meal', 45); mealTaken = true; }
-    else if (p.restBreaks && (p.groupType === 'seniors' || p.childAges.length || p.pace === 'relaxed') && cursor - lastBreak >= 2 * 3600000) addBreak('rest', 15);
+    if (candidate.facts.categories.includes('food')) lastBreak = cursor;
+    if (p.restBreaks && (p.groupType === 'seniors' || p.childAges.length || p.pace === 'relaxed') && cursor - lastBreak >= 2 * 3600000) {
+      const starts = new Date(cursor).toISOString(); cursor += 15 * 60000;
+      breaks.push({ kind: 'rest', afterLocationId: candidate.location.id, starts, ends: new Date(cursor).toISOString(), note: 'Personal rest break; a seat, restroom and accessible facilities are not confirmed.' }); lastBreak = cursor;
+    }
   }
   const lastLeg = legs.at(-1)!; cursor += lastLeg.durationSeconds * 1000; travelSeconds += lastLeg.durationSeconds; distance += lastLeg.distanceMeters;
-  if (personalMeal && deadline - departure >= 5 * 3600000 && !mealTaken) {
-    // Reserve time even for an early-finishing tour; do not invent a venue.
-    const last = rows.at(-1)!; const starts = new Date(last.departure).toISOString();
-    breaks.push({ kind: 'meal', afterLocationId: last.candidate.location.id, starts, ends: new Date(last.departure + 45 * 60000).toISOString(), note: '45-minute meal allowance before returning. Venue, dietary preparation and cost need confirmation.' }); cursor += 45 * 60000;
-  }
+  const missingMealAllowance = middayMealRequested(input) && cursor > lunchStart && !order.some(s => s.mealKind === 'lunch') ? (p.meals?.lunch.durationMinutes ?? 45) + p.bufferMinutes + (p.meals?.maxExtraMinutes ?? 15) : 0;
   return cursor + missingMealAllowance * 60000 <= deadline ? { rows, breaks, finish: cursor, travelSeconds, distance } : null;
 }
 function sequences<T>(items: T[], prefix: T[] = []): T[][] { if (prefix.length === 5) return [prefix]; return prefix.length ? [prefix, ...items.flatMap((item, i) => sequences(items.filter((_, j) => i !== j), [...prefix, item]))] : items.flatMap((item, i) => sequences(items.filter((_, j) => i !== j), [item])); }
 export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedLocation, candidates: GuideCandidate[], matrix: TravelMatrix, ranking: string[] = [], now = Date.now(), banned = new Set<string>(), maxVisits = 5) {
   const p = input.preferences;
-  const timing: Timing = { ...liveDeparture(input, destination, now), lunchStart: zonedTime(input.date, '12:00', destination.timezone!), lunchEnd: zonedTime(input.date, '15:00', destination.timezone!), appointments: new Map(input.stops.filter(s => s.preferredTime).map(s => [s.locationId, zonedTime(input.date, s.preferredTime!, destination.timezone!)])) };
+  const timing: Timing = { ...liveDeparture(input, destination, now), lunchStart: zonedTime(input.date, '13:00', destination.timezone!), appointments: new Map(input.stops.filter(s => s.preferredTime).map(s => [s.locationId, zonedTime(input.date, s.preferredTime!, destination.timezone!)])) };
   const bands = { morning: [zonedTime(input.date, '06:00', destination.timezone!), zonedTime(input.date, '12:00', destination.timezone!)], afternoon: [zonedTime(input.date, '12:00', destination.timezone!), zonedTime(input.date, '16:00', destination.timezone!)], evening: [zonedTime(input.date, '16:00', destination.timezone!), zonedTime(input.date, '21:00', destination.timezone!)] };
   const eligible = input.stops.filter(s => { const c = candidates.find(c => c.location.id === s.locationId); return c && !p.visitedPlaceIds.includes(c.location.placeId ?? '') && c.facts.hours.status !== 'closed'; });
   if (eligible.length !== input.stops.length && input.stops.some(s => (s.mustVisit || s.locked) && !eligible.includes(s))) throw new Error('A must-visit or locked place is closed, already visited or unavailable. Review it before planning.');
@@ -129,8 +125,8 @@ export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedL
   return { ...best, evaluated, originalTravelMinutes };
 }
 export function guideResult(input: GuidePlanRequest, destination: SelectedLocation, start: SelectedLocation, end: SelectedLocation, candidates: GuideCandidate[], order: GuideStop[], route: LiveRoute, comparison: GuidePlan['comparison'], assistantMode: 'local' | 'openai' | 'gemini', now = Date.now()): GuidePlan {
-  if (mealKinds.some(kind => input.preferences.meals?.[kind].enabled && !order.some(s => s.mealKind === kind))) throw new Error('A requested meal could not be scheduled. Adjust its window, duration or the trip deadline.');
   const schedule = scheduleGuide(order, candidates, input, destination, route.legs, now); if (!schedule) throw new Error('The final Google route no longer fits the opening windows or return deadline. Adjust the day and recalculate.');
+  if (middayMealDue(input, destination, schedule.finish) && !order.some(s => s.mealKind === 'lunch')) throw new Error('The route now overlaps 13:00–14:00 and needs a meal stop. Recalculate or uncheck Include meal.');
   const budget = budgetFor(order, candidates, input.preferences, route.distanceMeters), { deadline } = liveDeparture(input, destination, now);
   if (budget.status === 'over') throw new Error('The final route exceeds your known cost limit. Review transport estimates or choose fewer places.');
   const warnings = [route.mode === 'DRIVE' ? 'Travel times are Google predictions for one departure; traffic on later legs can change. Opening hours can change after lookup.' : 'Walking/cycling travel times are static estimates, not live traffic observations. Confirm date-specific access and opening changes.'];

@@ -8,7 +8,7 @@ const location = (name: string, city = false): SelectedLocation => ({ id: random
 async function setup(page: Page, withMeals = false) {
   const places = new Map<string, SelectedLocation>(), inputs: GuidePlanRequest[] = [], museum = location('Provider Museum'), garden = location('Provider Garden');
   const bank: GuideCandidate[] = [museum, garden].map((l, i) => ({ location: l, score: 20, reasons: ['Fits your interests.'], suggestedMinutes: 30, facts: { categories: [i ? 'gardens' : 'museums'], environment: i ? 'outdoor' : 'indoor', rating: 4, reviews: 100, hours: { status: 'unknown', windows: [], description: [] }, admission: null, accessible: null, goodForChildren: null, vegetarianOptions: null, website: null, providerUri: null, description: null, checkedAt: new Date().toISOString() } }));
-  const foodBank: GuideCandidate[] = ['Provider Lunch', 'Provider Dinner'].map(name => ({ ...bank[0], location: location(name), facts: { ...bank[0].facts, categories: ['food'], hours: { status: 'date_specific', windows: [{ opens: `${date}T09:00:00Z`, closes: `${date}T22:00:00Z` }], description: [] } } }));
+  const foodBank: GuideCandidate[] = ['Provider Lunch'].map(name => ({ ...bank[0], location: location(name), facts: { ...bank[0].facts, categories: ['food'], hours: { status: 'date_specific', windows: [{ opens: `${date}T09:00:00Z`, closes: `${date}T22:00:00Z` }], description: [] } } }));
   for (const c of [...bank, ...foodBank]) places.set(c.location.id, c.location);
   await page.addInitScript(() => {
     class LatLng { constructor(private latitude: number, private longitude: number) {} lat() { return this.latitude; } lng() { return this.longitude; } }
@@ -24,11 +24,11 @@ async function setup(page: Page, withMeals = false) {
     const body = r.request().postDataJSON() as GuidePlanRequest; inputs.push(body);
     let rows: GuideStop[] = body.orderMode === 'smart' && !body.stops.some(s => s.locked) ? [...body.stops].reverse() : body.stops;
     if (withMeals) {
-      rows = rows.flatMap((row, i) => [row, ...(i === 0 && body.preferences.meals?.lunch.enabled ? [{ ...row, locationId: foodBank[0].location.id, durationMinutes: body.preferences.meals.lunch.durationMinutes, mealKind: 'lunch' as const }] : []), ...(i === rows.length - 1 && body.preferences.meals?.dinner.enabled ? [{ ...row, locationId: foodBank[1].location.id, durationMinutes: body.preferences.meals.dinner.durationMinutes, mealKind: 'dinner' as const }] : [])]);
+      rows = rows.flatMap((row, i) => [row, ...(i === 0 && body.preferences.meals?.lunch.enabled ? [{ ...row, locationId: foodBank[0].location.id, durationMinutes: body.preferences.meals.lunch.durationMinutes, mealKind: 'lunch' as const }] : []), ]);
     }
     const destination = places.get(body.destinationId)!, start = places.get(body.startId)!, departure = Date.parse(`${body.date}T${body.startTime}:00Z`);
     let cursor = departure;
-    const stops = rows.map(row => { cursor += 20 * 60000; if (row.mealKind) cursor = Math.max(cursor, Date.parse(`${body.date}T${body.preferences.meals![row.mealKind].startTime}:00Z`)); const arrivalAt = new Date(cursor).toISOString(); cursor += row.durationMinutes * 60000; return { location: places.get(row.locationId)!, durationMinutes: row.durationMinutes, arrivalAt, departureAt: new Date(cursor).toISOString() }; });
+    const stops = rows.map(row => { cursor += 20 * 60000; if (row.mealKind === 'lunch') cursor = Math.max(cursor, Date.parse(`${body.date}T${body.preferences.meals!.lunch.startTime}:00Z`)); const arrivalAt = new Date(cursor).toISOString(); cursor += row.durationMinutes * 60000; return { location: places.get(row.locationId)!, durationMinutes: row.durationMinutes, arrivalAt, departureAt: new Date(cursor).toISOString() }; });
     const plan: GuidePlan = { orderMode: body.orderMode, assistantMode: 'local', itinerary: { destination, start, end: body.returnToStart ? start : places.get(body.endId!)!, stops, route: { provider: 'google_routes', mode: body.preferences.travelMode, durationSeconds: (rows.length + 1) * 600, distanceMeters: (rows.length + 1) * 3000, encodedPolyline: 'test-only-route', departureTime: new Date(departure).toISOString(), fetchedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300000).toISOString(), trafficBasis: 'prediction_for_departure', persistence: 'memory_only', legs: Array.from({ length: rows.length + 1 }, () => ({ durationSeconds: 600, distanceMeters: 3000 })), optimizedOrder: rows.map((_row, i) => i) }, finishAt: new Date(cursor + 600000).toISOString(), deadlineAt: `${body.date}T${body.endTime}:00Z`, withinTime: true, warnings: ['Confirm unverified venue facts.'] }, stops: rows.map(row => ({ locationId: row.locationId, ...(row.mealKind ? { mealKind: row.mealKind, mealDetour: { extraMinutes: 2, extraMeters: 500, fromPreviousMeters: 600 } } : {}), facts: [...bank, ...foodBank].find(c => c.location.id === row.locationId)!.facts, cost: null, reasons: ['Selected from verified IDs.'], bufferMinutes: 10, travelMinutes: 10, waitingMinutes: 0, hoursStatus: 'unknown' })), budget: { currency: null, groupKnownMinimum: 0, groupKnownMaximum: 0, perPersonKnownMinimum: 0, perPersonKnownMaximum: 0, groupLimit: null, unknowns: ['Admission unknown; not free.'], status: 'unknown' }, assumptions: ['Durations are estimates.'], excluded: [], breaks: [], comparison: { evaluatedSequences: body.orderMode === 'smart' ? 4 : 1, originalTravelMinutes: 60, selectedTravelMinutes: 30 } };
     await r.fulfill({ json: plan });
   });
@@ -72,14 +72,17 @@ test('optional meals, Any food, map highlights, saved preferences and manual edi
   await page.getByRole('button', { name: 'Any food', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Any food', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: 'Vegetarian options', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await page.getByLabel('Departure time', { exact: true }).fill('12:00');
   await page.getByLabel('Return by', { exact: true }).fill('21:00');
-  await page.getByRole('checkbox', { name: 'Include lunch', exact: true }).check();
-  await page.getByRole('checkbox', { name: 'Include dinner', exact: true }).check();
-  await page.getByLabel('Lunch duration (minutes)', { exact: true }).fill('50');
+  await expect(page.getByRole('checkbox', { name: 'Include meal', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: 'Include lunch', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: 'Include dinner', exact: true })).toHaveCount(0);
+  await page.getByText('Meal duration and detour limits', { exact: true }).click();
+  await page.getByLabel('Meal duration (minutes)', { exact: true }).fill('50');
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
   const review = page.getByRole('region', { name: 'Guided itinerary review', exact: true });
-  await expect(review).toContainText('50 min lunch'); await expect(review).toContainText('60 min dinner');
-  await expect(review.locator('.meal-route-note')).toHaveCount(2);
+  await expect(review).toContainText('50 min meal'); await expect(review).not.toContainText('Dinner');
+  await expect(review.locator('.meal-route-note')).toHaveCount(1);
   expect(state.inputs[0].preferences.dietaryRules).toEqual([]);
   expect(state.inputs[0].stops).toHaveLength(2); // Restaurants never become attraction-edit constraints.
   await review.getByRole('button', { name: 'Highlight Provider Lunch on map', exact: true }).click();
@@ -88,7 +91,7 @@ test('optional meals, Any food, map highlights, saved preferences and manual edi
   await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
-  await page.getByRole('combobox', { name: 'Completed visits', exact: true }).selectOption('4');
+  await page.getByRole('combobox', { name: 'Completed visits', exact: true }).selectOption('3');
   await page.getByRole('button', { name: /My day plan/ }).click();
   await page.getByLabel('Private day name', { exact: true }).fill('My day with meals');
   await page.getByRole('button', { name: 'Save day preferences', exact: true }).click();
@@ -98,8 +101,8 @@ test('optional meals, Any food, map highlights, saved preferences and manual edi
     opening.onsuccess = () => { const db = opening.result, read = db.transaction('days').objectStore('days').getAll(); read.onsuccess = () => { db.close(); resolve(read.result); }; };
   }));
   expect(saved[0].guide.preferences.meals.lunch.durationMinutes).toBe(50);
-  expect(saved[0].guide.preferences.meals.dinner.enabled).toBe(true);
-  expect(saved[0].guide.stops).toHaveLength(2); expect(saved[0].stops).toHaveLength(4);
+  expect(saved[0].guide.preferences.mealBreak).toBe(true); expect(saved[0].guide.preferences.meals).not.toHaveProperty('dinner');
+  expect(saved[0].guide.stops).toHaveLength(2); expect(saved[0].stops).toHaveLength(3);
   expect(JSON.stringify(saved)).not.toContain('provider address');
   await page.getByText('Adjust the planned visits', { exact: true }).click();
   await expect(page.getByLabel('Visit duration for Provider Lunch', { exact: true })).toHaveCount(0);
@@ -107,7 +110,7 @@ test('optional meals, Any food, map highlights, saved preferences and manual edi
   await page.getByRole('button', { name: 'Recalculate my day', exact: true }).click();
   await expect.poll(() => state.inputs.length).toBe(2);
   expect(state.inputs[1].orderMode).toBe('manual'); expect(state.inputs[1].stops).toHaveLength(2);
-  await expect(review).toContainText('50 min lunch'); await expect(review).toContainText('60 min dinner');
+  await expect(review).toContainText('50 min meal'); await expect(review).not.toContainText('Dinner');
 });
 
 test('an infeasible requested meal preserves the accepted itinerary and offers an actionable retry', async ({ page }) => {
@@ -116,10 +119,38 @@ test('an infeasible requested meal preserves the accepted itinerary and offers a
   await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await page.getByRole('button', { name: /My day plan/ }).click();
-  await page.route('**/api/guide/plan', r => r.fulfill({ status: 422, json: { error: { code: 'MEAL_INFEASIBLE', message: 'No lunch restaurant fits the detour limit. Adjust the meal window or turn lunch off.' } } }));
-  await page.getByRole('checkbox', { name: 'Include lunch', exact: true }).check();
-  await expect(page.getByRole('alert')).toContainText('No lunch restaurant fits');
+  await page.getByRole('checkbox', { name: 'Include meal', exact: true }).uncheck();
+  await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible();
+  await page.route('**/api/guide/plan', r => r.fulfill({ status: 422, json: { error: { code: 'MEAL_INFEASIBLE', message: 'No nearby meal fits the detour limit. Adjust the duration or uncheck Include meal.' } } }));
+  await page.getByRole('checkbox', { name: 'Include meal', exact: true }).check();
+  await expect(page.getByRole('alert')).toContainText('No nearby meal fits');
   await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Provider Museum');
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
+});
+
+test('unchecking Include meal removes the restaurant and saves the exclusion preference', async ({ page }) => {
+  const state = await setup(page, true);
+  await page.getByLabel('Departure time', { exact: true }).fill('12:00');
+  await expect(page.getByRole('checkbox', { name: 'Include meal', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: 'Include meal time', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
+  const review = page.getByRole('region', { name: 'Guided itinerary review', exact: true });
+  await expect(review.locator('.meal-route-note')).toHaveCount(1);
+  await page.getByRole('checkbox', { name: 'Include meal', exact: true }).uncheck();
+  await expect.poll(() => state.inputs.length).toBe(2);
+  await expect(review.locator('.meal-route-note')).toHaveCount(0);
+  await expect(review).not.toContainText('Provider Lunch');
+  expect(state.inputs[1].preferences.mealBreak).toBe(false);
+  expect(state.inputs[1].preferences.meals.lunch.enabled).toBe(false);
+  await page.getByLabel('Private day name', { exact: true }).fill('Day without a meal');
+  await page.getByRole('button', { name: 'Save day preferences', exact: true }).click();
+  await expect(page.getByText(/Private day preferences saved/)).toBeVisible();
+  const saved = await page.evaluate(() => new Promise<any[]>((resolve, reject) => {
+    const opening = indexedDB.open('daywise-live', 1); opening.onerror = () => reject(opening.error);
+    opening.onsuccess = () => { const db = opening.result, read = db.transaction('days').objectStore('days').getAll(); read.onsuccess = () => { db.close(); resolve(read.result); }; };
+  }));
+  expect(saved[0].guide.preferences.mealBreak).toBe(false);
+  expect(saved[0].guide.preferences.meals).not.toHaveProperty('dinner');
+  expect(saved[0].stops).toHaveLength(2);
 });

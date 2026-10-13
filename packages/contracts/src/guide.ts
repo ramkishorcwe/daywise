@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import { locationSchema, liveItinerarySchema, providerPlaceId } from './locations';
 export const interests = ['history', 'forts', 'palaces', 'culture', 'temples', 'shopping', 'nature', 'gardens', 'museums', 'food', 'nightlife', 'hidden_gems'] as const;
-export const mealKinds = ['lunch', 'dinner'] as const;
+export const mealKinds = ['lunch'] as const;
 export type MealKind = typeof mealKinds[number];
-export const defaultMealPreferences = { lunch: { enabled: false, startTime: '12:00', endTime: '15:00', durationMinutes: 45 }, dinner: { enabled: false, startTime: '18:00', endTime: '21:00', durationMinutes: 60 }, nearbyMeters: 1500, maxExtraMinutes: 15, maxExtraMeters: 2000 };
-const mealWindowSchema = z.strictObject({ enabled: z.boolean(), startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), durationMinutes: z.number().int().min(15).max(120) }).refine(m => !m.enabled || (m.startTime < m.endTime && Number(m.endTime.slice(0, 2)) * 60 + Number(m.endTime.slice(3)) - Number(m.startTime.slice(0, 2)) * 60 - Number(m.startTime.slice(3)) >= m.durationMinutes), 'The meal duration must fit its time window.');
-export const mealPreferencesSchema = z.strictObject({ lunch: mealWindowSchema, dinner: mealWindowSchema, nearbyMeters: z.number().int().min(100).max(3000), maxExtraMinutes: z.number().int().min(0).max(30), maxExtraMeters: z.number().int().min(0).max(5000) });
+export const defaultMealPreferences = { lunch: { enabled: true, startTime: '13:00', endTime: '14:00', durationMinutes: 45 }, nearbyMeters: 1500, maxExtraMinutes: 15, maxExtraMeters: 2000 };
+const mealWindowSchema = z.strictObject({ enabled: z.boolean(), startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), durationMinutes: z.number().int().min(15).max(120) }).refine(m => !m.enabled || m.startTime < m.endTime, 'The meal arrival window must end after it starts.');
+export const mealPreferencesSchema = z.strictObject({ lunch: mealWindowSchema, dinner: mealWindowSchema.optional(), nearbyMeters: z.number().int().min(100).max(3000), maxExtraMinutes: z.number().int().min(0).max(30), maxExtraMeters: z.number().int().min(0).max(5000) }).transform(({ dinner: _legacyDinner, ...meals }) => meals);
 export const mealDetourSchema = z.strictObject({ extraMinutes: z.number().finite().nonnegative(), extraMeters: z.number().finite().nonnegative(), fromPreviousMeters: z.number().finite().nonnegative() });
 export const guidePreferencesSchema = z.strictObject({
   interests: z.array(z.enum(interests)).max(12).default(['history', 'culture']), pace: z.enum(['relaxed', 'balanced', 'packed']).default('balanced'),
@@ -19,7 +19,7 @@ export const guidePreferencesSchema = z.strictObject({
   mealGroupEstimate: z.number().finite().nonnegative().nullable().default(null), transportGroupEstimate: z.number().finite().nonnegative().nullable().default(null),
   transportPerKmEstimate: z.number().finite().nonnegative().nullable().default(null),
   notes: z.string().max(1200).default(''), useAI: z.boolean().default(true),
-}).refine(p => p.adults + p.childAges.length <= 12, 'At most 12 travelers.').refine(p => p.groupType !== 'solo' || p.adults + p.childAges.length === 1, 'Solo means one traveler; update the group size below.').refine(p => (p.groupBudget === null && p.perPersonBudget === null && p.mealGroupEstimate === null && p.transportGroupEstimate === null && p.transportPerKmEstimate === null) || !!p.currency, 'Select a currency for monetary amounts.');
+}).refine(p => p.adults + p.childAges.length <= 12, 'At most 12 travelers.').refine(p => p.groupType !== 'solo' || p.adults + p.childAges.length === 1, 'Solo means one traveler; update the group size below.').refine(p => (p.groupBudget === null && p.perPersonBudget === null && p.mealGroupEstimate === null && p.transportGroupEstimate === null && p.transportPerKmEstimate === null) || !!p.currency, 'Select a currency for monetary amounts.').transform(p => ({ ...p, meals: { ...defaultMealPreferences, ...p.meals, lunch: { ...defaultMealPreferences.lunch, durationMinutes: p.meals?.lunch.durationMinutes ?? 45, enabled: p.mealBreak } } }));
 export type GuidePreferences = z.infer<typeof guidePreferencesSchema>;
 const costShape = { minimum: z.number().finite().nonnegative(), maximum: z.number().finite().nonnegative(), currency: z.string().regex(/^[A-Z]{3}$/), basis: z.enum(['person', 'group']) };
 export const costEstimateSchema = z.strictObject(costShape).refine(c => c.maximum >= c.minimum, 'Maximum must follow minimum.');
@@ -27,7 +27,7 @@ export const costSchema = z.strictObject({ ...costShape, source: z.enum(['review
 export const guideFactsSchema = z.strictObject({
   categories: z.array(z.enum(interests)).max(12), environment: z.enum(['indoor', 'outdoor', 'unknown']), rating: z.number().min(0).max(5).nullable(), reviews: z.number().int().nonnegative().nullable(),
   hours: z.strictObject({ status: z.enum(['date_specific', 'usual', 'unknown', 'closed']), windows: z.array(z.strictObject({ opens: z.iso.datetime(), closes: z.iso.datetime() })).max(20), description: z.array(z.string().max(500)).max(10), source: z.enum(['google', 'reviewed_catalog']).optional(), sourceUrl: z.url().nullable().optional() }),
-  mealServices: z.strictObject({ lunch: z.boolean().nullable(), dinner: z.boolean().nullable() }).optional(),
+  mealServices: z.strictObject({ lunch: z.boolean().nullable(), dinner: z.boolean().nullable().optional() }).optional(),
   admission: costSchema.nullable(), accessible: z.boolean().nullable(), goodForChildren: z.boolean().nullable(), vegetarianOptions: z.boolean().nullable(),
   containingPlaceIds: z.array(providerPlaceId).max(10).optional(), website: z.url().nullable(), providerUri: z.url().nullable(), description: z.string().max(2500).nullable(), checkedAt: z.iso.datetime(),
 });
@@ -37,7 +37,7 @@ export type GuideCandidate = z.infer<typeof candidateSchema>;
 const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 export const guideDiscoverSchema = z.strictObject({ destinationId: z.string().uuid(), date: z.iso.date(), preferences: guidePreferencesSchema });
 export const guideCandidateRequestSchema = guideDiscoverSchema.extend({ locationId: z.string().uuid() });
-export const guideStopSchema = z.strictObject({ mealKind: z.enum(mealKinds).optional(), locationId: z.string().uuid(), durationMinutes: z.number().int().min(10).max(240), mustVisit: z.boolean(), locked: z.boolean(), preferredTime: clock.nullable(), costEstimate: costEstimateSchema.nullable(), durationSource: z.enum(['category_estimate', 'gemini_estimate', 'user']).optional(), timeBand: z.enum(['any', 'morning', 'afternoon', 'evening']).optional() });
+export const guideStopSchema = z.strictObject({ mealKind: z.enum(['lunch', 'dinner']).optional(), locationId: z.string().uuid(), durationMinutes: z.number().int().min(10).max(240), mustVisit: z.boolean(), locked: z.boolean(), preferredTime: clock.nullable(), costEstimate: costEstimateSchema.nullable(), durationSource: z.enum(['category_estimate', 'gemini_estimate', 'user']).optional(), timeBand: z.enum(['any', 'morning', 'afternoon', 'evening']).optional() });
 export type GuideStop = z.infer<typeof guideStopSchema>;
 export const savedGuideSchema = z.strictObject({ preferences: guidePreferencesSchema, stops: z.array(guideStopSchema.omit({ locationId: true }).extend({ placeId: providerPlaceId })).max(5) });
 export type SavedGuide = z.infer<typeof savedGuideSchema>;
@@ -48,7 +48,7 @@ export type GuideRanking = z.infer<typeof guideRankingSchema>;
 export const guideDiscoverySchema = z.strictObject({ candidates: z.array(candidateSchema).max(8), warnings: z.array(z.string()).max(30), assistantMode: z.enum(['local', 'openai', 'gemini']) });
 export const guidePlanSchema = z.strictObject({
   itinerary: liveItinerarySchema, orderMode: z.enum(['smart', 'manual']), assistantMode: z.enum(['local', 'openai', 'gemini']),
-  stops: z.array(z.strictObject({ mealKind: z.enum(mealKinds).optional(), mealDetour: mealDetourSchema.optional(), locationId: z.string().uuid(), facts: guideFactsSchema, cost: costSchema.nullable(), reasons: z.array(z.string()).max(12), bufferMinutes: z.number().nonnegative(), travelMinutes: z.number().nonnegative(), waitingMinutes: z.number().nonnegative(), durationSource: z.enum(['category_estimate', 'gemini_estimate', 'user']).optional(), timeBand: z.enum(['any', 'morning', 'afternoon', 'evening']).optional(), hoursStatus: z.enum(['date_specific', 'usual', 'unknown']) })).min(1).max(7),
+  stops: z.array(z.strictObject({ mealKind: z.enum(['lunch', 'dinner']).optional(), mealDetour: mealDetourSchema.optional(), locationId: z.string().uuid(), facts: guideFactsSchema, cost: costSchema.nullable(), reasons: z.array(z.string()).max(12), bufferMinutes: z.number().nonnegative(), travelMinutes: z.number().nonnegative(), waitingMinutes: z.number().nonnegative(), durationSource: z.enum(['category_estimate', 'gemini_estimate', 'user']).optional(), timeBand: z.enum(['any', 'morning', 'afternoon', 'evening']).optional(), hoursStatus: z.enum(['date_specific', 'usual', 'unknown']) })).min(1).max(7),
   breaks: z.array(z.strictObject({ kind: z.enum(['meal', 'rest']), afterLocationId: z.string().uuid(), starts: z.iso.datetime(), ends: z.iso.datetime(), note: z.string() })).max(10),
   budget: z.strictObject({ currency: z.string().nullable(), groupKnownMinimum: z.number().nonnegative(), groupKnownMaximum: z.number().nonnegative(), perPersonKnownMinimum: z.number().nonnegative(), perPersonKnownMaximum: z.number().nonnegative(), groupLimit: z.number().nullable(), unknowns: z.array(z.string()).max(20), status: z.enum(['unknown', 'within_estimates', 'over']) }),
   assumptions: z.array(z.string()).max(30), excluded: z.array(z.strictObject({ locationId: z.string().uuid(), reason: z.string() })).max(8),

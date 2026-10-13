@@ -1,17 +1,17 @@
 import type { GuideCandidate, GuidePlanRequest, GuideStop, MealKind, TravelMatrix } from '../../contracts/src/guide';
 import type { LiveRoute, SelectedLocation } from '../../contracts/src/locations';
-import { budgetFor, scheduleGuide } from './guide-planner';
+import { budgetFor, scheduleGuide, middayMealRequested } from './guide-planner';
 import { zonedTime } from './time';
 
 export function mealSearchAnchors(order: GuideStop[], candidates: GuideCandidate[], input: GuidePlanRequest, destination: SelectedLocation, legs: LiveRoute['legs'], kind: MealKind) {
   const meal = input.preferences.meals?.[kind];
-  if (!meal?.enabled) return [];
+  if (!meal?.enabled || !middayMealRequested(input)) return [];
   const schedule = scheduleGuide(order, candidates, input, destination, legs);
   if (!schedule) return [];
   const opens = zonedTime(input.date, meal.startTime, destination.timezone!), closes = zonedTime(input.date, meal.endTime, destination.timezone!);
   // Search at up to two preceding visits closest to the requested meal window.
   // A restaurant can wait until the window opens, but must leave time to eat.
-  return schedule.rows.filter(r => !r.stop.mealKind && r.departure < closes - meal.durationMinutes * 60000)
+  return schedule.rows.filter(r => !r.stop.mealKind && r.departure < closes)
     .sort((a, b) => Math.abs(a.departure - opens) - Math.abs(b.departure - opens)).slice(0, 2).map(r => r.candidate);
 }
 
@@ -44,7 +44,7 @@ export function chooseMealInsertion(order: GuideStop[], candidates: GuideCandida
       if (!best || score < best.score) best = { order: trial, score };
     }
   }
-  if (!best) throw new Error(`No ${kind} restaurant fits the opening hours, nearby and detour limits, food preferences and return deadline. Adjust the meal window or duration, allow a little more detour, remove an optional visit, or turn this meal off.`);
+  if (!best) throw new Error('No nearby meal fits the opening hours, detour limits, food preferences and return deadline. Adjust the meal duration or trip times, allow a little more detour, remove an optional visit, or uncheck Include meal.');
   return best.order;
 }
 
