@@ -1,4 +1,6 @@
 .guide-panel { border-top: 1px solid var(--border, #dde4dd); padding-top: 24px; margin-top: 22px; }
+.app-recovery { max-width: 640px; margin: 10vh auto; padding: 24px; }
+.app-recovery p { margin: 18px 0; line-height: 1.7; }
 .guide-panel h2,.guide-panel h3 { margin-top: 22px; }
 .guide-panel fieldset { border: 0; padding: 0; margin: 18px 0; }
 .guide-panel legend { font-weight: 700; margin-bottom: 10px; }

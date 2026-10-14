@@ -18,13 +18,13 @@ import { readLocalTrip, writeLocalTrip, removeLocalTrip, localTripKey } from './
 import { pricePlanKey, type PriceAllowances } from './trip-price';
 import TripPriceSummary from './components/TripPriceSummary';
 import Dialog from './components/Dialog';
-const JourneyMap = lazy(() => import('./components/JourneyMap'));
+import JourneyMap from './components/JourneyMap';
+import LiveProgress from './components/LiveProgress';
 const ShareTrip = lazy(() => import('./components/ShareTrip'));
 const GuidePanel = lazy(() => import('./components/AutoGuidePanel'));
 const GuideReview = lazy(() => import('./components/GuideReview').then(module => ({ default: module.GuideReview })));
 
 const ProviderMap = lazy(() => import('./components/ProviderMap'));
-const LiveProgress = lazy(() => import('./components/LiveProgress'));
 type Stop = { key: string; location: SelectedLocation | null; durationMinutes: number };
 type ScheduleCheck = (input: { date: string; startTime: string; endTime: string }, destination: SelectedLocation) => void;
 const emptyStop = (): Stop => ({ key: crypto.randomUUID(), location: null, durationMinutes: 60 });
@@ -142,7 +142,16 @@ function LiveWorkspace({ reset }: { reset: () => void }) {
     finally { restoring.current = false; if (generation.current === id) setBusy(false); }
   }
   function guidedPreview(plan: GuidePlan | null) { setGuideReview(plan); setPreview(plan?.itinerary ?? null); if (plan) setStops(plan.itinerary.stops.map(stop => ({ key: crypto.randomUUID(), location: stop.location, durationMinutes: stop.durationMinutes }))); }
-  function guidedAccept(plan: GuidePlan) { setAccepted(structuredClone(plan.itinerary)); setAcceptedGuide(structuredClone(plan)); setAcceptedPriceAllowances(priceAllowances?.planKey === pricePlanKey(plan) ? structuredClone(priceAllowances) : acceptedPriceAllowances?.planKey === pricePlanKey(plan) ? structuredClone(acceptedPriceAllowances) : undefined); setAcceptedId(crypto.randomUUID()); setNotice('Guided itinerary accepted. Later edits remain drafts. Confirm unverified information before visiting.'); setView('day'); }
+  function guidedAccept(plan: GuidePlan) {
+    const itinerary = structuredClone(plan.itinerary), guide = structuredClone(plan), id = crypto.randomUUID();
+    const allowances = priceAllowances?.planKey === pricePlanKey(plan) ? structuredClone(priceAllowances) : acceptedPriceAllowances?.planKey === pricePlanKey(plan) ? structuredClone(acceptedPriceAllowances) : undefined;
+    // Persist acceptance before rendering another view, which could encounter a stale deployment asset.
+    if (!recovery.error && !deleted.current) {
+      try { writeLocalTrip(localStorage, { ...snapshot, updatedAt: new Date().toISOString(), accepted: itinerary, acceptedGuide: guide, acceptedId: id, acceptedPriceAllowances: allowances, view: 'day' }); hasSavedTrip.current = true; setSaveStatus('Saved on this device'); setStorageError(''); }
+      catch { setStorageError('Local saving failed. Your trip is still on screen, but these changes may not survive refresh. Check device storage and retry.'); }
+    }
+    setAccepted(itinerary); setAcceptedGuide(guide); setAcceptedPriceAllowances(allowances); setAcceptedId(id); setNotice('Guided itinerary accepted. Later edits remain drafts. Confirm unverified information before visiting.'); setView('day');
+  }
   const itinerary = view === 'day' ? accepted : preview;
   const pricePlan = view === 'day' || view === 'budget' ? acceptedGuide : guideReview;
   const sharedPlan = pricePlan;
