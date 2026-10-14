@@ -10,6 +10,7 @@ export const mealDetourSchema = z.strictObject({ extraMinutes: z.number().finite
 export const guidePreferencesSchema = z.strictObject({
   interests: z.array(z.enum(interests)).max(12).default(['history', 'culture']), pace: z.enum(['relaxed', 'balanced', 'packed']).default('balanced'),
   groupType: z.enum(['unspecified', 'solo', 'couple', 'friends', 'family', 'seniors']).default('unspecified'), environment: z.enum(['any', 'indoor', 'outdoor']).default('any'),
+  visitorPricing: z.enum(['auto', 'indian', 'foreign']).default('auto'), mealPriceTier: z.enum(['auto', 'budget', 'standard', 'premium']).default('auto'),
   mobility: z.enum(['standard', 'limited', 'wheelchair']).default('standard'), travelMode: z.enum(['DRIVE', 'WALK', 'BICYCLE']).default('DRIVE'),
   adults: z.number().int().min(1).max(12), childAges: z.array(z.number().int().min(0).max(17)).max(11),
   groupBudget: z.number().finite().nonnegative().nullable(), perPersonBudget: z.number().finite().nonnegative().nullable().default(null), currency: z.string().regex(/^[A-Z]{3}$/).nullable(),
@@ -23,12 +24,19 @@ export const guidePreferencesSchema = z.strictObject({
 export type GuidePreferences = z.infer<typeof guidePreferencesSchema>;
 const costShape = { minimum: z.number().finite().nonnegative(), maximum: z.number().finite().nonnegative(), currency: z.string().regex(/^[A-Z]{3}$/), basis: z.enum(['person', 'group']) };
 export const costEstimateSchema = z.strictObject(costShape).refine(c => c.maximum >= c.minimum, 'Maximum must follow minimum.');
-export const costSchema = z.strictObject({ ...costShape, source: z.enum(['reviewed_catalog', 'user_estimate']), sourceUrl: z.url().nullable() }).refine(c => c.maximum >= c.minimum, 'Maximum must follow minimum.');
+export const costSchema = z.strictObject({ ...costShape, source: z.enum(['reviewed_catalog', 'user_estimate', 'published_estimate', 'planning_estimate']), sourceUrl: z.url().nullable(),
+  note: z.string().max(600).optional(), checkedAt: z.iso.datetime().optional(),
+  tariff: z.strictObject({ indianAdult: z.number().nonnegative(), foreignAdult: z.number().nonnegative(), category: z.enum(['indian', 'foreign']).nullable(), suggestedByCurrency: z.boolean(), currency: z.literal('INR') }).optional(),
+  childRate: z.strictObject({ belowAge: z.number().int().min(1).max(18), minimum: z.number().nonnegative(), maximum: z.number().nonnegative() }).optional(),
+  original: z.strictObject({ minimum: z.number().nonnegative(), maximum: z.number().nonnegative(), currency: z.string().regex(/^[A-Z]{3}$/) }).optional(),
+  exchange: z.strictObject({ rate: z.number().positive(), date: z.iso.date(), sourceUrl: z.url() }).optional(),
+}).refine(c => c.maximum >= c.minimum, 'Maximum must follow minimum.');
+export type GuideCost = z.infer<typeof costSchema>;
 export const guideFactsSchema = z.strictObject({
   categories: z.array(z.enum(interests)).max(12), environment: z.enum(['indoor', 'outdoor', 'unknown']), rating: z.number().min(0).max(5).nullable(), reviews: z.number().int().nonnegative().nullable(),
   hours: z.strictObject({ status: z.enum(['date_specific', 'usual', 'unknown', 'closed']), windows: z.array(z.strictObject({ opens: z.iso.datetime(), closes: z.iso.datetime() })).max(20), description: z.array(z.string().max(500)).max(10), source: z.enum(['google', 'reviewed_catalog']).optional(), sourceUrl: z.url().nullable().optional() }),
   mealServices: z.strictObject({ lunch: z.boolean().nullable(), dinner: z.boolean().nullable().optional() }).optional(),
-  admission: costSchema.nullable(), accessible: z.boolean().nullable(), goodForChildren: z.boolean().nullable(), vegetarianOptions: z.boolean().nullable(),
+  admission: costSchema.nullable(), mealCost: costSchema.optional(), mealReserve: costSchema.optional(), pricingExchange: z.strictObject({ rate: z.number().positive(), date: z.iso.date(), sourceUrl: z.url() }).optional(), priceLevel: z.string().max(60).optional(), accessible: z.boolean().nullable(), goodForChildren: z.boolean().nullable(), vegetarianOptions: z.boolean().nullable(),
   containingPlaceIds: z.array(providerPlaceId).max(10).optional(), website: z.url().nullable(), providerUri: z.url().nullable(), description: z.string().max(2500).nullable(), checkedAt: z.iso.datetime(),
 });
 export type GuideFacts = z.infer<typeof guideFactsSchema>;
@@ -48,9 +56,11 @@ export type GuideRanking = z.infer<typeof guideRankingSchema>;
 export const guideDiscoverySchema = z.strictObject({ candidates: z.array(candidateSchema).max(8), warnings: z.array(z.string()).max(30), assistantMode: z.enum(['local', 'openai', 'gemini']) });
 export const guidePlanSchema = z.strictObject({
   itinerary: liveItinerarySchema, orderMode: z.enum(['smart', 'manual']), assistantMode: z.enum(['local', 'openai', 'gemini']),
-  stops: z.array(z.strictObject({ mealKind: z.enum(['lunch', 'dinner']).optional(), mealDetour: mealDetourSchema.optional(), locationId: z.string().uuid(), facts: guideFactsSchema, cost: costSchema.nullable(), reasons: z.array(z.string()).max(12), bufferMinutes: z.number().nonnegative(), travelMinutes: z.number().nonnegative(), waitingMinutes: z.number().nonnegative(), durationSource: z.enum(['category_estimate', 'gemini_estimate', 'user']).optional(), timeBand: z.enum(['any', 'morning', 'afternoon', 'evening']).optional(), hoursStatus: z.enum(['date_specific', 'usual', 'unknown']) })).min(1).max(7),
+  stops: z.array(z.strictObject({ mealKind: z.enum(['lunch', 'dinner']).optional(), mealDetour: mealDetourSchema.optional(), locationId: z.string().uuid(), facts: guideFactsSchema, cost: costSchema.nullable(), groupCost: costEstimateSchema.optional(), mealCost: costSchema.optional(), reasons: z.array(z.string()).max(12), bufferMinutes: z.number().nonnegative(), travelMinutes: z.number().nonnegative(), waitingMinutes: z.number().nonnegative(), durationSource: z.enum(['category_estimate', 'gemini_estimate', 'user']).optional(), timeBand: z.enum(['any', 'morning', 'afternoon', 'evening']).optional(), hoursStatus: z.enum(['date_specific', 'usual', 'unknown']) })).min(1).max(7),
   breaks: z.array(z.strictObject({ kind: z.enum(['meal', 'rest']), afterLocationId: z.string().uuid(), starts: z.iso.datetime(), ends: z.iso.datetime(), note: z.string() })).max(10),
-  budget: z.strictObject({ currency: z.string().nullable(), groupKnownMinimum: z.number().nonnegative(), groupKnownMaximum: z.number().nonnegative(), perPersonKnownMinimum: z.number().nonnegative(), perPersonKnownMaximum: z.number().nonnegative(), groupLimit: z.number().nullable(), unknowns: z.array(z.string()).max(20), status: z.enum(['unknown', 'within_estimates', 'over']) }),
+  budget: z.strictObject({ currency: z.string().nullable(), groupKnownMinimum: z.number().nonnegative(), groupKnownMaximum: z.number().nonnegative(), perPersonKnownMinimum: z.number().nonnegative(), perPersonKnownMaximum: z.number().nonnegative(), groupLimit: z.number().nullable(), unknowns: z.array(z.string()).max(20), status: z.enum(['unknown', 'within_estimates', 'over']),
+    breakdown: z.strictObject({ people: z.number().int().min(1).max(12), tickets: z.strictObject({ minimum: z.number().nonnegative(), maximum: z.number().nonnegative() }), food: z.strictObject({ minimum: z.number().nonnegative(), maximum: z.number().nonnegative() }), transport: z.strictObject({ minimum: z.number().nonnegative(), maximum: z.number().nonnegative() }) }).optional(),
+  }),
   assumptions: z.array(z.string()).max(30), excluded: z.array(z.strictObject({ locationId: z.string().uuid(), reason: z.string() })).max(8),
   comparison: z.strictObject({ originalTravelMinutes: z.number().nonnegative().nullable(), selectedTravelMinutes: z.number().nonnegative(), evaluatedSequences: z.number().int().nonnegative() }),
 });

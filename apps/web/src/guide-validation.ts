@@ -1,6 +1,7 @@
 import type { ZodError } from 'zod';
 export type GuideFieldIssue = { field: string; label: string; message: string };
 const labels: Record<string, string> = {
+  visitorPricing: 'Admission visitor category', mealPriceTier: 'Meal price preference',
   groupBudget: 'Group budget', currency: 'Budget currency', adults: 'Adults', childAges: 'Children', groupType: 'Group type',
   perPersonBudget: 'Optional per-person budget limit', mealGroupEstimate: 'Your group meal estimate', transportGroupEstimate: 'Your fixed group transport estimate', transportPerKmEstimate: 'Your group transport estimate per km', bufferMinutes: 'Arrival buffer (minutes)',
   'meals.lunch.durationMinutes': 'Meal duration (minutes)', 'meals.nearbyMeters': 'Maximum distance from previous visit (km)', 'meals.maxExtraMinutes': 'Maximum extra travel per meal (minutes)', 'meals.maxExtraMeters': 'Maximum extra distance per meal (km)',

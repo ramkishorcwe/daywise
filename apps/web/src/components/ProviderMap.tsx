@@ -6,7 +6,7 @@ import { googleKeyIsValid } from '../../../../packages/data-adapters/src/google-
 
 import { loadMaps, subscribeMapFailures, mapAuthorizationFailed, authorizationMessage } from '../maps-sdk';
 const noPoints: { name: string; coordinates: Coordinate }[] = [];
-export default function ProviderMap({ route, points = noPoints, pick, activeIndex, onSelectStop, snapshot = false }: { route?: RouteEstimate; points?: { name: string; coordinates: Coordinate }[]; pick?: (point: Coordinate) => void; activeIndex?: number; onSelectStop?: (index: number) => void; snapshot?: boolean }) {
+export default function ProviderMap({ route, points = noPoints, pick, activeIndex, onSelectStop, snapshot = false }: { route?: RouteEstimate; points?: { name: string; coordinates: Coordinate; price?: string }[]; pick?: (point: Coordinate) => void; activeIndex?: number; onSelectStop?: (index: number) => void; snapshot?: boolean }) {
   const root = useRef<HTMLDivElement>(null), mapRef = useRef<google.maps.Map | null>(null), [error, setError] = useState(''), [retry, setRetry] = useState(0), [loading, setLoading] = useState(false);
   const visibleMarkers = useRef<Array<{ marker: google.maps.Marker; indices: number[] }>>([]), selection = useRef(onSelectStop); selection.current = onSelectStop;
   useEffect(() => { for (const row of visibleMarkers.current) { const selected = activeIndex !== undefined && row.indices.includes(activeIndex); row.marker.setAnimation?.(selected ? google.maps.Animation?.BOUNCE ?? null : null); if (selected) { const position = row.marker.getPosition?.(); if (position) mapRef.current?.panTo?.(position); } } }, [activeIndex, loading]);
@@ -30,9 +30,10 @@ export default function ProviderMap({ route, points = noPoints, pick, activeInde
       if (route) line = new google.maps.Polyline({ path, map, strokeColor: '#246c5c', strokeWeight: 5 });
       const grouped = new Map<string, { coordinates: Coordinate; names: string[]; labels: string[] }>();
       points.forEach((point, index) => {
+        const name = point.price ? `${point.name} · ${point.price}` : point.name;
         const key = `${point.coordinates.latitude},${point.coordinates.longitude}`, existing = grouped.get(key);
-        if (existing) { if (!existing.names.includes(point.name)) existing.names.push(point.name); existing.labels.push(String(index + 1)); }
-        else grouped.set(key, { coordinates: point.coordinates, names: [point.name], labels: [String(index + 1)] });
+        if (existing) { if (!existing.names.includes(name)) existing.names.push(name); existing.labels.push(String(index + 1)); }
+        else grouped.set(key, { coordinates: point.coordinates, names: [name], labels: [String(index + 1)] });
       });
       visibleMarkers.current = [];
       grouped.forEach(point => { const marker = new google.maps.Marker({ map, position: { lat: point.coordinates.latitude, lng: point.coordinates.longitude }, title: point.names.join(' / '), label: point.labels.join('/') }); markers.push(marker); const indices = point.labels.map(label => Number(label) - 1); visibleMarkers.current.push({ marker, indices }); if (selection.current) marker.addListener?.('click', () => selection.current?.(indices[0])); });

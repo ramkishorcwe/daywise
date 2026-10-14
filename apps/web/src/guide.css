@@ -28,3 +28,6 @@
 .meal-options { display: grid; gap: 1rem; }
 .meal-option { border: 1px solid var(--line, #dce3de); border-radius: 12px; padding: 1rem; }
 .meal-route-note { background: #edf5ef; border-radius: 10px; padding: .75rem; }
+
+.stop-price { padding: .65rem .85rem; background: #f5f7ef; border-left: 3px solid #647345; border-radius: .5rem; margin: .75rem 0; }
+.stop-price p { margin: .3rem 0; }
