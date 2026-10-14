@@ -2,6 +2,11 @@
 .guide-panel h2,.guide-panel h3 { margin-top: 22px; }
 .guide-panel fieldset { border: 0; padding: 0; margin: 18px 0; }
 .guide-panel legend { font-weight: 700; margin-bottom: 10px; }
+.guide-panel .guide-interest-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.guide-panel .guide-interest-chips button { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 10px 14px; border: 1px solid #c5d3ca; border-radius: 24px; background: #fff; color: #314c41; }
+.guide-panel .guide-interest-chips button[aria-pressed=true] { background: #246e5b; border-color: #246e5b; color: #fff; }
+.guide-panel .guide-interest-chips button:hover { box-shadow: 0 0 0 2px #246e5b33; }
+.guide-panel .interest-check { width: 1em; text-align: center; font-weight: 700; }
 .guide-panel select,.guide-panel textarea,.guide-edit-list input { width: 100%; min-height: 42px; border: 1px solid #d8dfd8; background: #f7f9f5; border-radius: 8px; padding: 9px 10px; color: #233d34; font: inherit; }
 .guide-panel textarea { min-height: 90px; resize: vertical; }
 .guide-panel details { margin: 16px 0; }
