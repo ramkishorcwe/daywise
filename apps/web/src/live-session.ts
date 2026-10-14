@@ -29,7 +29,7 @@ export function readLocalTrip(storage: Storage): { trip: LocalTrip | null; error
   } catch { return { trip: null, error: 'The local trip could not be read. Its stored copy has been preserved. Retry or delete the local trip to start fresh.' }; }
 }
 export function writeLocalTrip(storage: Storage, value: LocalTrip) {
-  const raw = JSON.stringify(localTripSchema.parse(value));
+  const raw = JSON.stringify(localTripSchema.parse(value), (key, item) => key === 'receipt' ? undefined : item);
   if (raw.length > 4_000_000) throw new Error('This itinerary is too large for local saving.');
   storage.setItem(localTripKey, raw);
 }

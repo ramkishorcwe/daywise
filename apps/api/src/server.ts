@@ -30,8 +30,15 @@ import { registerGuideRoutes } from './guide';
 import type { GuidePlacesProvider } from '../../../packages/data-adapters/src/google-guide';
 
 import type { ExchangeRates } from '../../../packages/data-adapters/src/exchange-rates';
+import type { EvidenceReceipts } from './receipts';
+import type { HostedBudget } from './hosted-budget';
+import type { SharedTripStore } from './shared-trips';
+import { sharedTripSchema, sharedIdSchema } from '../../../packages/contracts/src/shared-trip';
 
 export interface ServerOptions {
+  shares?: SharedTripStore;
+  receipts?: EvidenceReceipts;
+  hostedBudget?: HostedBudget;
   pricingRates?: ExchangeRates;
   auth: Authenticator; store: TripStore; fixtures: boolean; catalog?: CheckedCatalog;
   routes?: RouteProvider; places?: GooglePlaces; webOrigin: string; logger?: boolean; rateMax?: number; providerDailyLimit?: number;
@@ -52,13 +59,13 @@ export async function createServer(options: ServerOptions) {
     !Number.isInteger(options.fixtureSessionRateMax) || options.fixtureSessionRateMax < 1 || options.fixtureSessionRateMax > 30
   )) throw new Error('Session limit overrides require development CI with local fixture-only adapters and zero paid-call allowances.');
   if (options.operatorToken && options.operatorToken.length < 32) throw new Error('Operator credentials must be at least 32 characters.');
-  const app = Fastify({ logger: options.logger ? { redact: ['req.headers.authorization', 'req.headers.cookie'] } : false, logController: new Fastify.LogController({ disableRequestLogging: true }), bodyLimit: 32768, requestTimeout: 15000, trustProxy: false });
+  const app = Fastify({ logger: options.logger ? { redact: ['req.headers.authorization', 'req.headers.cookie'] } : false, logController: new Fastify.LogController({ disableRequestLogging: true }), bodyLimit: options.receipts ? 131072 : 32768, requestTimeout: 15000, trustProxy: false });
   const catalog = options.catalog ?? new CheckedCatalog([]), guard = new IdempotencyGuard();
-  const providerGuard = new ProviderGuard(options.providerDailyLimit ?? 100);
-  const locations = new LocationRegistry();
+  const providerGuard = new ProviderGuard(options.providerDailyLimit ?? 100, () => Date.now(), 'provider', options.hostedBudget);
+  const locations = new LocationRegistry(() => Date.now(), options.receipts);
   const interpreter = options.interpreter ?? new LocalInterpreter();
   const telemetry = new Telemetry();
-  const assistant = new AssistantService(options.store, interpreter, options.fixtures, () => Date.now(), options.aiDailyLimit);
+  const assistant = new AssistantService(options.store, interpreter, options.fixtures, () => Date.now(), options.aiDailyLimit, options.hostedBudget);
   const candidates = new Map<string, { owner: string; tripId: string; revision: number; input: TripInput; plan: Plan; expires: number }>();
   const now = () => new Date().toISOString();
   const owners = new WeakMap<FastifyRequest, string>();
@@ -88,7 +95,7 @@ export async function createServer(options: ServerOptions) {
     if (request.method === 'OPTIONS') return reply.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, Idempotency-Key').header('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS').code(204).send();
     const path = request.url.split('?')[0];
     if (path === '/api/ops/status') { requireOperator(options.operatorToken, request.headers.authorization, request.ip, origin); return; }
-    if (path === '/api/health' || path === '/api/dev/session' || path === '/api/readiness' || path === '/api/locations/config') return;
+    if (path === '/api/health' || path === '/api/dev/session' || path === '/api/readiness' || path === '/api/locations/config' || (request.method === 'GET' && /^\/api\/shared\/[A-Za-z0-9_-]{43}$/.test(path))) return;
     const authorization = request.headers.authorization;
     if (!authorization?.startsWith('Bearer ')) throw new ApiError(401, 'UNAUTHENTICATED', 'Connect to the backend first.');
     owners.set(request, await options.auth.verify(authorization.slice(7)));
@@ -103,6 +110,10 @@ export async function createServer(options: ServerOptions) {
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'The server could not complete this request.' }, requestId: request.id });
   });
   const owner = (request: FastifyRequest) => owners.get(request)!;
+  const sharedStore = () => { if (!options.shares) throw new ApiError(503, 'SHARING_NOT_CONFIGURED', 'Page sharing is available from the deployed Daywise app. Open the public app to create a shareable itinerary link.'); return options.shares; };
+  app.post('/api/shared', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => sharedStore().create(owner(request), sharedTripSchema.parse(request.body)));
+  app.get('/api/shared/:id', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async request => sharedStore().get(sharedIdSchema.parse((request.params as { id: string }).id)));
+  app.delete('/api/shared/:id', async request => { await sharedStore().delete(owner(request), sharedIdSchema.parse((request.params as { id: string }).id)); return { deleted: true }; });
   const tripId = (request: FastifyRequest) => idSchema.parse((request.params as { id: string }).id);
   function validateFixture(input: TripInput) {
     if (!options.fixtures) throw new ApiError(422, 'CITY_NOT_READY', 'Live itinerary planning is not enabled. Configure and verify a complete catalog before enabling it.');
@@ -112,25 +123,34 @@ export async function createServer(options: ServerOptions) {
   const mutate = <T>(request: FastifyRequest, body: unknown, work: () => Promise<T>) => guard.run(`${owner(request)}:${request.method}:${request.url.split('?')[0]}`, request.headers['idempotency-key'], body, work);
   app.get('/api/health', async () => ({ schemaVersion: 1, authMode: options.auth.mode, persistence: options.auth.mode === 'local' ? 'local_file' : 'firestore', fixturePlanning: options.fixtures, routingConfigured: !!options.routes, placesConfigured: !!options.places, checkedCities: catalog.available().length, livePlanning: false, assistantMode: interpreter.mode }));
   app.get('/api/locations/config', async () => ({ ...(options.locationCapabilities ?? { autocomplete: !!options.locations, reverseGeocode: !!options.locations, timezone: !!options.locations, routing: !!options.liveRoutes }), guideDiscovery: !!options.guide, guideRouting: !!options.liveRoutes?.matrix, guideAssistant: interpreter.mode, ...(options.locationConfigurationIssues?.length ? { issues: options.locationConfigurationIssues } : {}) }));
-  registerGuideRoutes(app, { options, locations, guard: providerGuard, owner, interpreter, assistant, catalog });
+  const guideEvidence = registerGuideRoutes(app, { options, locations, guard: providerGuard, owner, interpreter, assistant, catalog });
+  if (options.receipts) app.addHook('preHandler', async request => {
+    if (!request.body || typeof request.body !== 'object' || !('_evidence' in request.body)) return;
+    const body = request.body as Record<string, unknown>;
+    const receipt = z.string().regex(/^[A-Za-z0-9_-]{40,50000}$/);
+    const evidence = z.strictObject({ locations: z.array(receipt).max(14), guides: z.array(receipt).max(10) }).parse(body._evidence);
+    delete body._evidence;
+    for (const value of evidence.locations) locations.restore(owner(request), value);
+    for (const value of evidence.guides) guideEvidence.restore(owner(request), value);
+  });
   const locationProvider = () => { if (!options.locations) throw new ApiError(503, 'LOCATION_PROVIDER_NOT_CONFIGURED', 'Configure the server Google Places, Geocoding and Time Zone keys. See location-setup.md.'); return options.locations; };
   function requireLocationCapabilities(...required: Array<'autocomplete' | 'reverseGeocode' | 'timezone'>) {
     const missing = required.filter(key => options.locationCapabilities && !options.locationCapabilities[key]);
     if (missing.length) throw new ApiError(503, 'LOCATION_PROVIDER_NOT_CONFIGURED', `Configure ${missing.join(', ')} on the server before this lookup. See location-setup.md for the required APIs and keys.`);
   }
   app.post('/api/locations/autocomplete', { config: { rateLimit: { max: 45, timeWindow: '1 minute', keyGenerator: request => owner(request) ?? request.ip } } }, async request => {
-    const body = autocompleteSchema.parse(request.body), provider = locationProvider(); requireLocationCapabilities('autocomplete'); providerGuard.consume();
+    const body = autocompleteSchema.parse(request.body), provider = locationProvider(); requireLocationCapabilities('autocomplete'); await providerGuard.consume();
     return provider.autocomplete(body.input, body.sessionToken, body.citiesOnly, body.bias);
   });
   app.post('/api/locations/resolve', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async request => {
-    const body = resolveLocationSchema.parse(request.body), provider = locationProvider(), signal = AbortSignal.timeout(18000); requireLocationCapabilities('autocomplete', 'reverseGeocode', ...(body.destinationCity ? ['timezone' as const] : [])); providerGuard.consume();
+    const body = resolveLocationSchema.parse(request.body), provider = locationProvider(), signal = AbortSignal.timeout(18000); requireLocationCapabilities('autocomplete', 'reverseGeocode', ...(body.destinationCity ? ['timezone' as const] : [])); await providerGuard.consume();
     const detail = await provider.details(body.placeId, body.sessionToken, signal);
     if (body.destinationCity && !detail.types.some(type => ['locality', 'postal_town', 'administrative_area_level_3'].includes(type))) throw new ApiError(422, 'CITY_REQUIRED', 'Select a city suggestion for the trip destination, rather than a hotel or address.');
-    providerGuard.consume(); const reversed = await provider.reverse(detail.coordinates, signal);
+    await providerGuard.consume(); const reversed = await provider.reverse(detail.coordinates, signal);
     let timezone: string | undefined;
     if (body.destinationCity) {
       if (!reversed.city) throw new ApiError(422, 'CITY_UNVERIFIED', 'Google could not identify the destination city and country. Select a more specific city suggestion.');
-      providerGuard.consume(); timezone = await provider.timezone(detail.coordinates, signal);
+      await providerGuard.consume(); timezone = await provider.timezone(detail.coordinates, signal);
     }
     // Compare all selections using the reverse-geocoded locality identity.
     // Places search and Geocoding can give the same city different place IDs;
@@ -143,7 +163,7 @@ export async function createServer(options: ServerOptions) {
     const gps = body.source === 'gps' ? { accuracyMeters: body.accuracyMeters!, observedAt: body.observedAt! } : undefined;
     let data;
     try {
-      const provider = locationProvider(); requireLocationCapabilities('reverseGeocode'); providerGuard.consume();
+      const provider = locationProvider(); requireLocationCapabilities('reverseGeocode'); await providerGuard.consume();
       const reversed = await provider.reverse(body.coordinates, AbortSignal.timeout(10000));
       data = { ...reversed, coordinates: body.coordinates, source: body.source, addressStatus: 'resolved' as const, ...(gps ?? {}) };
     } catch (failure) {
@@ -248,7 +268,7 @@ export async function createServer(options: ServerOptions) {
     const params = request.params as { cityId: string; locationId: string }, city = catalog.city(params.cityId);
     const location = city?.locations.find(value => value.id === params.locationId); if (!location?.googlePlaceId) throw missing();
     if (!options.places) throw new ApiError(503, 'PROVIDER_NOT_CONFIGURED', 'Configure the server Places key before requesting enrichment.');
-    providerGuard.consume();
+    await providerGuard.consume();
     return options.places.details(location.googlePlaceId);
   });
   app.post('/api/assistant/turns', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async request => {

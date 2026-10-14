@@ -1,0 +1,29 @@
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { z } from 'zod';
+import { sharedIdSchema, sharedTripSchema, type SharedTrip } from '../../../../packages/contracts/src/shared-trip';
+import { request } from '../api';
+import { priceRange } from '../trip-price';
+import { formatTime } from '../../../../packages/domain/src/time-format';
+const ProviderMap = lazy(() => import('./ProviderMap'));
+
+export default function SharedTripPage() {
+  const [value, setValue] = useState<{ trip: SharedTrip; expiresAt: string } | null>(null), [error, setError] = useState(''), [retry, setRetry] = useState(0), [active, setActive] = useState(0);
+  useEffect(() => {
+    const abort = new AbortController(); setError('');
+    const id = sharedIdSchema.safeParse(window.location.pathname.split('/')[2]);
+    if (!id.success) { setError('This itinerary link is invalid. Ask the trip owner for a new link.'); return; }
+    request(`/shared/${id.data}`, { signal: abort.signal }, false).then(data => setValue(z.strictObject({ trip: sharedTripSchema, expiresAt: z.iso.datetime() }).parse(data))).catch(failure => { if (!abort.signal.aborted) setError(failure?.status === 404 ? 'This shared itinerary has expired or was removed. Ask the owner for a new link.' : 'The shared itinerary could not load. Please retry.'); });
+    return () => abort.abort();
+  }, [retry]);
+  const t = value?.trip, points = useMemo(() => t ? [...(t.start ? [{ ...t.start, name: 'Start · ' + t.start.name }] : []), ...t.stops.map(s => ({ ...s.point, name: (s.meal ? 'Meal · ' : '') + s.point.name })), ...(t.end ? [{ ...t.end, name: 'Return · ' + t.end.name }] : [])] : [], [t]);
+  const time = (iso: string) => formatTime(Date.parse(iso), t!.timezone);
+  return <div className="shared-page"><header><a className="shared-brand" href="/">daywise.</a><span>Shared itinerary · read only</span><a className="button secondary" href="/">Plan your own day</a></header><main>
+    {error ? <section className="live-card error-box" role="alert"><p>{error}</p><button className="button secondary" onClick={() => setRetry(r => r + 1)}>Retry</button></section> : !t ? <p role="status">Opening your shared itinerary…</p> : <>
+      <span className="eyebrow">YOUR DAY, TOGETHER</span><h1>{t.title || `A day in ${t.city}`}</h1><p>{t.city} · {new Intl.DateTimeFormat('en', { timeZone: t.timezone, dateStyle: 'long' }).format(new Date(t.departureAt))} · {time(t.departureAt)}–{time(t.finishAt)} · {t.timezone}</p>
+      <p className="field-note">A snapshot shared by the trip owner. Travel times and venue prices may change. Available until {new Date(value!.expiresAt).toLocaleDateString()}.</p>
+      {t.price && <section className="live-card trip-price" aria-label="Trip price summary"><h2>Trip price summary</h2><p className="trip-price-total">{priceRange(t.price.total.minimum, t.price.total.maximum, t.price.currency)}</p><p>For the whole group · {t.price.partial ? 'partial estimate; unpriced costs remain' : 'estimated range'} · actual prices may vary.</p>{t.price.people && <p>Per-person trip estimate: <b>{priceRange(t.price.total.minimum / t.price.people, t.price.total.maximum / t.price.people, t.price.currency)}</b> · {t.price.people} travelers.</p>}<dl>{t.price.rows.map((row, i) => <div key={i}><dt>{row.label}</dt><dd>{priceRange(row.minimum, row.maximum, t.price!.currency)}</dd></div>)}</dl>{t.price.limit !== null && <p>Group budget limit: {new Intl.NumberFormat('en', t.price.currency ? { style: 'currency', currency: t.price.currency } : {}).format(t.price.limit)}</p>}{!!t.price.unknowns.length && <details><summary>Costs still to confirm</summary><ul>{t.price.unknowns.map((s, i) => <li key={i}>{s}</li>)}</ul></details>}</section>}
+      <section className="live-card journey-map" aria-label="Shared journey map"><h2>{t.start ? 'Your whole journey' : 'Your visit route'}</h2><p>{(t.travel.meters / 1000).toFixed(1)} km planned travel · {Math.ceil(t.travel.seconds / 60)} min · {t.travel.mode.toLowerCase()}</p>{!t.start && <p>The owner kept starting and return locations private. The map shows visit pins.</p>}<Suspense fallback={<p role="status">Loading map…</p>}><ProviderMap snapshot route={t.route} points={points} activeIndex={active} onSelectStop={setActive} /></Suspense><ol className="journey-stops">{points.map((p, i) => <li key={i}><button className="text-button" onClick={() => setActive(i)}>{i + 1}. {p.name}</button></li>)}</ol><a className="button secondary" href={t.mapUrl} target="_blank" rel="noopener noreferrer">Open journey in Google Maps</a>{!!t.mapSections.length && <div className="button-row">{t.mapSections.map((url, i) => <a className="button secondary" href={url} key={i} target="_blank" rel="noopener noreferrer">Map section {i + 1}</a>)}</div>}</section>
+      <section className="live-card" aria-label="Shared itinerary"><h2>Your itinerary</h2>{t.start && <p><b>Start · {time(t.departureAt)}</b><br />{t.start.address ?? t.start.name}</p>}{t.stops.map((s, i) => <article className={`shared-stop ${active === i + (t.start ? 1 : 0) ? 'guide-highlight' : ''}`} key={i}><span className="eyebrow">{s.meal ? 'MEAL' : `VISIT ${i + 1}`} · {time(s.arrivalAt)}–{time(s.departureAt)}</span><h3>{s.point.name}</h3><p>{s.point.address}</p><p>{s.durationMinutes} minutes planned at this stop.</p>{s.priceLines.map((line, j) => <p className="field-note" key={j}>{line}</p>)}<button className="text-button" onClick={() => { setActive(i + (t.start ? 1 : 0)); document.querySelector('.journey-map')?.scrollIntoView({ behavior: 'smooth' }); }}>Show on journey map</button></article>)}{t.end && <p><b>Return · {time(t.finishAt)}</b><br />{t.end.address ?? t.end.name}</p>}</section><p>Confirm opening hours, fees and food preparation directly before visiting. Google Maps</p>
+    </>}
+  </main></div>;
+}

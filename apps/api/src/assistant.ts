@@ -11,13 +11,14 @@ import { formatMoney } from '../../../packages/domain/src/money';
 import { formatTime } from '../../../packages/domain/src/time-format';
 import { explicitDelay, type IntentInterpreter } from '../../../packages/data-adapters/src/assistant';
 import { ProviderGuard } from './provider-guard';
+import type { HostedBudget } from './hosted-budget';
 
 export class AssistantService {
   private proposals = new Map<string, { owner: string; value: Proposal; state: 'pending' | 'resolving' }>();
   private aiBudget: ProviderGuard;
-  constructor(private store: TripStore, private interpreter: IntentInterpreter, private fixtures: boolean, private clock = () => Date.now(), aiDailyLimit = 20) { this.aiBudget = new ProviderGuard(aiDailyLimit, clock, 'ai'); }
+  constructor(private store: TripStore, private interpreter: IntentInterpreter, private fixtures: boolean, private clock = () => Date.now(), aiDailyLimit = 20, hostedBudget?: HostedBudget) { this.aiBudget = new ProviderGuard(aiDailyLimit, clock, 'ai', hostedBudget); }
   usage() { return this.aiBudget.usage(); }
-  reserveAI() { if (this.interpreter.mode !== 'local') this.aiBudget.consume(); }
+  reserveAI() { if (this.interpreter.mode !== 'local') return this.aiBudget.consume(); }
   cleanup() { const now = this.clock(); for (const [id, record] of this.proposals) if (Date.parse(record.value.expiresAt) <= now) this.proposals.delete(id); this.aiBudget.cleanup(); }
   forget(owner: string, tripId: string) { for (const [id, record] of this.proposals) if (record.owner === owner && record.value.tripId === tripId) this.proposals.delete(id); }
   private context(trip: RemoteTrip) {
@@ -38,7 +39,7 @@ export class AssistantService {
   async turn(owner: string, id: string, revision: number, message: string): Promise<{ reply: AssistantReply; trip: RemoteTrip }> {
     let trip = await this.store.get(owner, id); if (trip.revision !== revision) throw stale();
     const { city, confirmed } = this.context(trip);
-    this.reserveAI();
+    await this.reserveAI();
     const action = await this.interpreter.interpret(message, city);
     if ((await this.store.get(owner, id)).revision !== trip.revision) throw stale();
     // Interpreter output never gets mutation privileges or trusted travel facts.

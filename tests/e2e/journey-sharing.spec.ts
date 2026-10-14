@@ -1,18 +1,23 @@
 import { expect, test } from '@playwright/test';
 import { setup } from './helpers/live-guide';
-test('WhatsApp draft carries schedule and a public route, and map preview follows endpoint privacy choices', async ({ page }) => {
+test('WhatsApp shares the actual itinerary page and map preview follows endpoint privacy choices', async ({ page, context }) => {
   await page.setViewportSize({ width: 390, height: 844 }); await setup(page, true, true);
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Share trip', exact: true }).click();
   const dialog = page.getByRole('dialog'), link = dialog.getByRole('link', { name: 'Share itinerary on WhatsApp', exact: true });
+  const id = 'A'.repeat(43), expiresAt = new Date(Date.now() + 86400000).toISOString(); let snapshot: Record<string, unknown> = {};
+  await context.route('**/api/shared', async r => { snapshot = r.request().postDataJSON(); await r.fulfill({ json: { id, expiresAt } }); });
+  await context.route(`**/api/shared/${id}`, async r => r.fulfill({ json: { trip: snapshot, expiresAt } }));
+  await dialog.getByRole('button', { name: 'Create itinerary page link', exact: true }).click(); await expect(link).toBeVisible();
   const first = new URL((await link.getAttribute('href'))!).searchParams.get('text')!;
-  expect(first).toContain('Daywise itinerary'); expect(first).toContain('Meal · Provider Lunch'); expect(first).toContain('https://www.google.com/maps/dir/?'); expect(first).not.toContain('Provider start'); expect(first).not.toContain('127.0.0.1'); expect(first).toContain('Group estimate:');
-  await dialog.getByText('WhatsApp message preview', { exact: true }).click(); await expect(dialog.getByRole('textbox', { name: 'WhatsApp message preview', exact: true })).toHaveValue(first);
+  expect(new URL(first).pathname).toBe(`/shared/${id}`); expect(first).not.toContain('google.com');
+  expect(snapshot).not.toHaveProperty('start'); expect(snapshot).not.toHaveProperty('route'); expect(snapshot).not.toHaveProperty('preferences'); expect(snapshot).toHaveProperty('price');
+  const recipient = await context.newPage(); await recipient.goto(first); await expect(recipient.getByRole('region', { name: 'Shared itinerary', exact: true })).toContainText('Provider Lunch'); await expect(recipient.getByRole('region', { name: 'Trip price summary', exact: true })).toBeVisible(); await expect(recipient.getByRole('region', { name: 'Shared journey map', exact: true })).not.toContainText('Provider start'); await recipient.close();
   await dialog.getByRole('button', { name: 'Preview shared map', exact: true }).click(); const publicMap = dialog.getByRole('region', { name: 'Shared visit map', exact: true });
   await expect(publicMap.locator('[data-map-rendered=true]')).toBeVisible(); await expect(publicMap).not.toContainText('Provider start'); await expect(publicMap).toContainText('Nahargarh Fort');
   await dialog.getByRole('checkbox', { name: 'Include starting and return locations', exact: true }).check(); const fullMap = dialog.getByRole('region', { name: 'Whole journey map', exact: true }); await expect(fullMap).toContainText('Start · Provider start'); await expect(fullMap).toContainText('Return · Provider start');
-  const full = new URL((await link.getAttribute('href'))!).searchParams.get('text')!; expect(full).toContain('Provider start'); expect(full).toContain('Whole journey map');
-  await dialog.getByRole('checkbox', { name: 'Include price summary', exact: true }).uncheck(); expect(new URL((await link.getAttribute('href'))!).searchParams.get('text')).not.toContain('Group estimate:');
+  await expect(link).toHaveCount(0); await dialog.getByRole('button', { name: 'Create itinerary page link', exact: true }).click(); await expect(link).toBeVisible(); expect(snapshot).toHaveProperty('start'); expect(snapshot).toHaveProperty('route');
+  await dialog.getByRole('checkbox', { name: 'Include price summary', exact: true }).uncheck(); await dialog.getByRole('button', { name: 'Create itinerary page link', exact: true }).click(); await expect(link).toBeVisible(); expect(snapshot).not.toHaveProperty('price');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); await page.screenshot({ path: 'artifacts/whatsapp-share-mobile.png', fullPage: true });
 });
 test('accepted whole-journey map, return point and highlight remain synchronized after refresh', async ({ page }) => {

@@ -30,3 +30,15 @@ it('distinguishes Gemini provider quota from the app limit without retry storms 
   await expect(new GeminiInterpreter('test', 'configured-model', request).rankGuide(context)).rejects.toMatchObject({ code: 'QUOTA', message: expect.stringContaining('midnight Pacific time') });
   expect(request).toHaveBeenCalledTimes(1);
 });
+it('reports temporary upstream overload separately from credential failure and makes no automatic retry', async () => {
+  for (const status of [500, 503]) {
+    const request = vi.fn<typeof fetch>(async () => Response.json({ error: { message: 'private upstream detail' } }, { status }));
+    await expect(new GeminiInterpreter('test', 'configured-model', request).rankGuide(context)).rejects.toMatchObject({ code: 'UNAVAILABLE', message: expect.stringContaining(`HTTP ${status}`) });
+    expect(request).toHaveBeenCalledTimes(1);
+  }
+});
+it('identifies unsupported server regions without publishing raw provider payloads', async () => {
+  const request = vi.fn<typeof fetch>(async () => Response.json({ error: { message: 'User location is not supported for the API use. private-token' } }, { status: 400 }));
+  await expect(new GeminiInterpreter('test', 'configured-model', request).rankGuide(context)).rejects.toMatchObject({ message: expect.stringContaining('server region') });
+  try { await new GeminiInterpreter('test', 'configured-model', request).rankGuide(context); } catch (error) { expect(String(error)).not.toContain('private-token'); }
+});
