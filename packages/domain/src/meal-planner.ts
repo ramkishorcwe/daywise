@@ -1,17 +1,17 @@
 import type { GuideCandidate, GuidePlanRequest, GuideStop, MealKind, TravelMatrix } from '../../contracts/src/guide';
 import type { LiveRoute, SelectedLocation } from '../../contracts/src/locations';
-import { budgetFor, scheduleGuide } from './guide-planner';
+import { budgetFor, scheduleGuide, middayMealRequested } from './guide-planner';
 import { zonedTime } from './time';
 
 export function mealSearchAnchors(order: GuideStop[], candidates: GuideCandidate[], input: GuidePlanRequest, destination: SelectedLocation, legs: LiveRoute['legs'], kind: MealKind) {
   const meal = input.preferences.meals?.[kind];
-  if (!meal?.enabled) return [];
+  if (!meal?.enabled || !middayMealRequested(input)) return [];
   const schedule = scheduleGuide(order, candidates, input, destination, legs);
   if (!schedule) return [];
   const opens = zonedTime(input.date, meal.startTime, destination.timezone!), closes = zonedTime(input.date, meal.endTime, destination.timezone!);
   // Search at up to two preceding visits closest to the requested meal window.
   // A restaurant can wait until the window opens, but must leave time to eat.
-  return schedule.rows.filter(r => !r.stop.mealKind && r.departure < closes - meal.durationMinutes * 60000)
+  return schedule.rows.filter(r => !r.stop.mealKind && r.departure < closes)
     .sort((a, b) => Math.abs(a.departure - opens) - Math.abs(b.departure - opens)).slice(0, 2).map(r => r.candidate);
 }
 
@@ -22,10 +22,10 @@ export function chooseMealInsertion(order: GuideStop[], candidates: GuideCandida
   let best: { order: GuideStop[]; score: number } | undefined;
   for (const restaurant of restaurants) {
     if (order.some(s => candidates.find(c => c.location.id === s.locationId)?.location.placeId === restaurant.location.placeId)) continue;
-    for (let gap = 1; gap <= order.length; gap++) {
-      const previous = index(order[gap - 1].locationId), next = gap === order.length ? candidates.length + 1 : index(order[gap].locationId), point = index(restaurant.location.id);
+    for (let gap = 0; gap <= order.length; gap++) {
+      const previous = gap ? index(order[gap - 1].locationId) : 0, next = gap === order.length ? candidates.length + 1 : index(order[gap].locationId), point = index(restaurant.location.id);
       const anchor = order.slice(0, gap).filter(s => !s.mealKind).at(-1);
-      const nearby = anchor ? matrix[index(anchor.locationId)]?.[point] : null;
+      const nearby = matrix[anchor ? index(anchor.locationId) : 0]?.[point];
       const direct = matrix[previous]?.[next], incoming = matrix[previous]?.[point], outgoing = matrix[point]?.[next];
       if (!nearby || !direct || !incoming || !outgoing) continue;
       const extraSeconds = Math.max(0, incoming.durationSeconds + outgoing.durationSeconds - direct.durationSeconds);
@@ -44,7 +44,7 @@ export function chooseMealInsertion(order: GuideStop[], candidates: GuideCandida
       if (!best || score < best.score) best = { order: trial, score };
     }
   }
-  if (!best) throw new Error(`No ${kind} restaurant fits the opening hours, nearby and detour limits, food preferences and return deadline. Adjust the meal window or duration, allow a little more detour, remove an optional visit, or turn this meal off.`);
+  if (!best) throw new Error('No nearby meal fits the opening hours, detour limits, food preferences and return deadline. Adjust the meal duration or trip times, allow a little more detour, remove an optional visit, or uncheck Include meal.');
   return best.order;
 }
 
@@ -58,7 +58,7 @@ export function validateMealDetours(order: GuideStop[], candidates: GuideCandida
     const anchorIndex = candidates.findIndex(c => c.location.id === anchor?.locationId) + 1;
     const point = candidates.findIndex(c => c.location.id === stop.locationId) + 1;
     const nearby = order[i - 1]?.mealKind ? matrix[anchorIndex]?.[point]?.distanceMeters : incoming?.distanceMeters;
-    if (!anchorIndex || nearby === undefined || !previous || !direct || !incoming || !outgoing) throw new Error('The final meal route has incomplete comparison data. Recalculate.');
+    if ((i > 0 && (!anchorIndex || !previous)) || nearby === undefined || !direct || !incoming || !outgoing) throw new Error('The final meal route has incomplete comparison data. Recalculate.');
     const result = { extraMinutes: Math.max(0, incoming.durationSeconds + outgoing.durationSeconds - direct.durationSeconds) / 60, extraMeters: Math.max(0, incoming.distanceMeters + outgoing.distanceMeters - direct.distanceMeters), fromPreviousMeters: nearby };
     if (result.fromPreviousMeters > limits.nearbyMeters || result.extraMinutes > limits.maxExtraMinutes || result.extraMeters > limits.maxExtraMeters) throw new Error('The final Google route exceeds your meal detour limits. Recalculate or adjust those limits.');
     return result;

@@ -19,7 +19,7 @@ test('phone expense totals replace estimates, survive offline reload and export 
   await expect(page.getByText('Retained; actual takes precedence', { exact: false })).toBeVisible();
   const projection = await page.getByTestId('projected-total').textContent(); expect(projection).not.toBe(original);
   expect(await page.locator('.budget-total').textContent()).toBe(original);
-  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click(); await expect(page.getByText('Your draft and confirmed plan are saved on this device.', { exact: true })).toBeVisible();
   await page.route('**/api/**', route => route.abort()); await page.reload();
   await page.getByRole('button', { name: 'Trip budget', exact: true }).click(); await expect(page.getByTestId('projected-total')).toHaveText(projection!);
   const downloading = page.waitForEvent('download'); await page.getByRole('button', { name: 'Export this budget', exact: true }).click(); const download = await downloading;

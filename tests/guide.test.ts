@@ -98,30 +98,31 @@ async function mealApi(nearby?: import('../packages/data-adapters/src/google-gui
     raw.currentOpeningHours!.periods![0].close!.hour = 22;
     return raw;
   };
-  const nearbyRestaurants = vi.fn(nearby ?? (async () => [restaurant('provider-lunch-restaurant'), restaurant('provider-dinner-restaurant')]));
+  const nearbyRestaurants = vi.fn(nearby ?? (async () => [restaurant('provider-lunch-restaurant')]));
   const a = await api({ guide: { discover: async () => Array.from({ length: 5 }, (_, i) => rawPlace(`provider-attraction-${i}`)), facts: async id => rawPlace(id), nearbyRestaurants } });
   a.matrixCall.mockImplementation(async points => matrix(points.length - 2, 2));
   a.routeCall.mockImplementation(async (_start, _end, stops, departureTime, _optimize, _signal, mode = 'DRIVE') => ({ provider: 'google_routes', mode, durationSeconds: (stops.length + 1) * 120, distanceMeters: (stops.length + 1) * 600, encodedPolyline: 'test-only-route-with-meals', departureTime, fetchedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300000).toISOString(), trafficBasis: 'prediction_for_departure', persistence: 'memory_only', legs: Array.from({ length: stops.length + 1 }, () => ({ durationSeconds: 120, distanceMeters: 600 })), optimizedOrder: stops.map((_s, i) => i) }));
   const { defaultMealPreferences } = await import('../packages/contracts/src/guide');
   a.body.preferences.meals = structuredClone(defaultMealPreferences);
-  a.body.preferences.meals.lunch.enabled = true; a.body.preferences.meals.dinner.enabled = true;
+  a.body.preferences.meals.lunch.enabled = true;
   a.body.preferences.mealBreak = true; a.body.preferences.mealGroupEstimate = 120;
+  a.body.stops.forEach(s => { s.durationMinutes = 75; });
   a.body.endTime = '21:00'; a.body.orderMode = 'manual';
   return { ...a, nearbyRestaurants };
 }
 
-it('adds lunch and dinner to five preserved visits, with seven mapped stops and a validated return', async () => {
+it('automatically adds one midday meal to five preserved visits, with six mapped stops and a validated return', async () => {
   const a = await mealApi(), response = await a.post('/api/guide/plan', a.body);
   expect(response.statusCode, response.body).toBe(200);
   const plan = response.json();
-  expect(plan.itinerary.stops).toHaveLength(7);
-  expect(plan.stops.filter((s: { mealKind?: string }) => s.mealKind).map((s: { mealKind: string }) => s.mealKind)).toEqual(['lunch', 'dinner']);
+  expect(plan.itinerary.stops).toHaveLength(6);
+  expect(plan.stops.filter((s: { mealKind?: string }) => s.mealKind).map((s: { mealKind: string }) => s.mealKind)).toEqual(['lunch']);
   expect(plan.stops.filter((s: { mealKind?: string }) => !s.mealKind).map((s: { locationId: string }) => s.locationId)).toEqual(a.body.stops.map(s => s.locationId));
   expect(plan.breaks.filter((b: { kind: string }) => b.kind === 'meal')).toHaveLength(0);
   expect(plan.itinerary.end.id).toBe(a.body.startId);
   expect(plan.budget.groupKnownMaximum).toBe(120); expect(plan.budget.status).toBe('unknown');
   expect(plan.stops.filter((s: { mealKind?: string }) => s.mealKind).every((s: { mealDetour: { extraMinutes: number; fromPreviousMeters: number } }) => s.mealDetour.extraMinutes <= 15 && s.mealDetour.fromPreviousMeters <= 1500)).toBe(true);
-  expect(a.routeCall.mock.calls[0][2]).toHaveLength(7); expect(a.routeCall.mock.calls[0][4]).toBe(false);
+  expect(a.routeCall.mock.calls[0][2]).toHaveLength(6); expect(a.routeCall.mock.calls[0][4]).toBe(false);
   expect(Math.max(...a.matrixCall.mock.calls.map(call => call[0].length))).toBeLessThanOrEqual(10);
   const count = a.matrixCall.mock.calls.length, key = randomUUID();
   expect((await a.post('/api/guide/plan', a.body, key)).statusCode).toBe(200);
@@ -130,9 +131,34 @@ it('adds lunch and dinner to five preserved visits, with seven mapped stops and 
 });
 
 it('does no restaurant lookup when meals are disabled and keeps the existing route shape', async () => {
-  const a = await mealApi(); a.body.preferences.meals!.lunch.enabled = false; a.body.preferences.meals!.dinner.enabled = false;
+  const a = await mealApi(); a.body.preferences.mealBreak = false;
   expect((await a.post('/api/guide/plan', a.body)).statusCode).toBe(200);
   expect(a.nearbyRestaurants).not.toHaveBeenCalled(); expect(a.matrixCall).toHaveBeenCalledTimes(1);
+});
+
+it('skips the meal for morning, evening and early-finishing tours without making restaurant requests', async () => {
+  for (const [startTime, endTime] of [['09:00', '12:00'], ['16:00', '18:00'], ['09:00', '21:00']]) {
+    const a = await mealApi(); a.body.startTime = startTime; a.body.endTime = endTime;
+    a.body.stops = a.body.stops.slice(0, 1); a.body.stops[0].durationMinutes = 30;
+    const response = await a.post('/api/guide/plan', a.body);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().stops.every((s: { mealKind?: string }) => !s.mealKind)).toBe(true);
+    expect(response.json().breaks.some((b: { kind: string }) => b.kind === 'meal')).toBe(false);
+    expect(a.nearbyRestaurants).not.toHaveBeenCalled(); expect(a.matrixCall).toHaveBeenCalledTimes(1);
+  }
+});
+
+it('uses the actual starting point for a midday meal when the first visit would finish after the meal window', async () => {
+  const a = await mealApi(); a.body.startTime = '13:30'; a.body.endTime = '17:00';
+  const source = await a.post('/api/locations/reverse', { coordinates: { latitude: 51.012, longitude: 0.001 }, source: 'pin' });
+  expect(source.statusCode).toBe(200); a.body.startId = source.json<SelectedLocation>().id;
+  a.body.stops = a.body.stops.slice(0, 1); a.body.stops[0].durationMinutes = 75;
+  const response = await a.post('/api/guide/plan', a.body);
+  expect(response.statusCode, response.body).toBe(200);
+  const plan = response.json(); expect(plan.stops[0].mealKind).toBe('lunch');
+  expect(plan.itinerary.stops[0].arrivalAt).toBe(`${date}T13:32:00.000Z`);
+  expect(plan.stops[0].mealDetour.fromPreviousMeters).toBe(600);
+  expect(a.nearbyRestaurants.mock.calls[0][0]).toEqual(a.routeCall.mock.calls[0][0]);
 });
 
 it('restaurant provider failures and missing hours are actionable and never become invented meals', async () => {

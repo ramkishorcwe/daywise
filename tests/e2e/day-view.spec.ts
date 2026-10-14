@@ -8,12 +8,12 @@ test('phone day view preserves an accepted revision exactly across reload and ba
   await page.getByRole('combobox', { name: 'Completed stops', exact: true }).selectOption('1');
   await page.getByRole('button', { name: 'Record progress', exact: true }).click();
   await page.getByRole('button', { name: 'Delay 30 minutes', exact: true }).click();
-  await page.getByRole('button', { name: 'Accept revision', exact: true }).click(); await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Accept revision', exact: true }).click(); await expect(page.getByText('Revision accepted and saved. Future changes still require review.', { exact: true })).toBeVisible(); await page.keyboard.press('Escape');
   const timeline = await page.locator('.stop-time').allTextContents(); const total = await page.locator('.budget-total').textContent();
   await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
   await expect(page.locator('.day-next h2')).toHaveText('City Story Museum');
   await expect(page.getByText('1 of 6', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click(); await expect(page.getByText('Your draft and confirmed plan are saved on this device.', { exact: true })).toBeVisible();
   await page.route('**/api/**', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'UNAVAILABLE', message: 'Simulated offline backend.' } }) }));
   await page.reload(); await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeDisabled();
   expect(await page.locator('.stop-time').allTextContents()).toEqual(timeline); expect(await page.locator('.budget-total').textContent()).toBe(total);
@@ -29,7 +29,7 @@ test('all reported stops leave a return journey and starting another day preserv
   await page.getByRole('button', { name: 'Confirm this plan', exact: true }).click(); await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
   await page.getByRole('button', { name: 'Report progress or a delay', exact: true }).click(); await page.getByRole('button', { name: 'Use my confirmed plan', exact: true }).click();
   await page.getByRole('combobox', { name: 'Completed stops', exact: true }).selectOption('6');
-  await page.getByRole('button', { name: 'Record progress', exact: true }).click(); await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Record progress', exact: true }).click(); await expect(page.getByText(/Progress revision 1/)).toBeVisible(); await page.keyboard.press('Escape');
   await expect(page.getByText('RETURN JOURNEY', { exact: true })).toBeVisible();
   await expect(page.getByText(/arrival at the endpoint has not been reported/)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
