@@ -14,10 +14,14 @@ export async function request<T>(path: string, init: RequestInit = {}, authentic
   if (authenticated && refreshToken) token = await refreshToken();
   const headers = new Headers(init.headers); if (init.body) headers.set('Content-Type', 'application/json');
   if (authenticated) { if (!token) throw new HttpError(401, 'UNAUTHENTICATED', 'Connect to the backend first.'); headers.set('Authorization', `Bearer ${token}`); }
+  const milliseconds = path === '/guide/plan' ? 80000 : path === '/guide/discover' || path === '/plans/live' ? 60000 : 20000;
+  const timeout = AbortSignal.timeout(milliseconds);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  const timedOut = () => new HttpError(408, 'REQUEST_TIMEOUT', `${path === '/guide/plan' ? 'Itinerary planning' : path === '/guide/discover' ? 'Attraction discovery' : 'The request'} took longer than ${milliseconds / 1000} seconds. Retry when ready; no automatic retry was sent. Your accepted trip is preserved.`);
   let response: Response;
-  try { response = await fetch(`/api${path}`, { ...init, headers, signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000) }); }
-  catch (error) { if (init.signal?.aborted) throw error; throw new Error('The backend is unavailable. Start it with npm run dev:api, then retry.'); }
-  let data: unknown; try { data = await response.json(); } catch { throw new Error('The backend returned an unreadable response.'); }
+  try { response = await fetch(`/api${path}`, { ...init, headers, signal }); }
+  catch (error) { if (init.signal?.aborted) throw error; if (timeout.aborted) throw timedOut(); throw new Error('The backend is unavailable. Start it with npm run dev:api, then retry.'); }
+  let data: unknown; try { data = await response.json(); } catch (error) { if (init.signal?.aborted) throw error; if (timeout.aborted) throw timedOut(); throw new Error('The backend returned an unreadable response.'); }
   if (!response.ok) { const failure = data as { error?: { code?: string; message?: string } }; throw new HttpError(response.status, failure.error?.code ?? 'REQUEST_FAILED', failure.error?.message ?? 'The request failed.'); }
   return data as T;
 }
