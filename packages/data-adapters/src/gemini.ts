@@ -18,7 +18,9 @@ export class GeminiInterpreter implements IntentInterpreter {
     let response: Response;
     try { response = await this.request(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`, { method: 'POST', headers: { 'x-goog-api-key': this.key, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(20000), body: JSON.stringify({ systemInstruction: { parts: [{ text: instructions }] }, contents: [{ role: 'user', parts: [{ text: JSON.stringify(data) }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 4096, responseMimeType: 'application/json', responseJsonSchema: schema } }) }); }
     catch { throw new ProviderError('UNAVAILABLE', 'Gemini did not respond. Retry or use the clearly labeled local planner.'); }
-    if (!response.ok) throw new ProviderError(response.status === 429 ? 'QUOTA' : 'UNAVAILABLE', 'Gemini rejected the request. Check its key, model access and quota; your day was not accepted.');
+    if (!response.ok) throw new ProviderError(response.status === 429 ? 'QUOTA' : 'UNAVAILABLE', response.status === 429
+      ? `Google Gemini's provider quota or rate limit was reached for ${this.model}. This is separate from the app's AI allowance. Wait and retry; if the daily quota is exhausted, it resets at midnight Pacific time. Check this model in AI Studio, or turn off Use configured AI planning. Your accepted trip is preserved.`
+      : 'Gemini rejected the request. Check its key, model access and quota; your day was not accepted.');
     try { const body = await response.json() as { candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }; const candidate = body.candidates?.[0]; if (candidate?.finishReason !== 'STOP') throw new Error(); return JSON.parse(candidate.content?.parts?.filter(p => !p.thought).map(p => p.text ?? '').join('') ?? ''); }
     catch { throw new ProviderError('INVALID_RESPONSE', 'Gemini returned an incomplete planning decision. Retry; no substitute itinerary was generated.'); }
   }

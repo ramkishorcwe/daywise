@@ -78,7 +78,7 @@ This project now uses `ASSISTANT_MODE=gemini`. The key was copied from the local
 ASSISTANT_MODE=gemini
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.1-flash-lite
-AI_DAILY_LIMIT=20
+AI_DAILY_LIMIT=100
 ```
 
 The blank key above is documentation only; the real local `.env` is configured. The original model alias in the supplied file returned a service error. The accessible stable `gemini-3.1-flash-lite` model passed a structured request and was selected instead. The app sends the key in the server `x-goog-api-key` header, never in a URL or VITE field. Actual field support was verified against the account; the request uses `responseMimeType` and `responseJsonSchema`. Retain access to the Generative Language API and its model quota/billing independently of Google Maps billing. After environment changes restart the API; `/api/locations/config` reports `guideAssistant: "gemini"`.
@@ -159,3 +159,9 @@ When no manual fixed/per-km transport estimate exists, Indian driving routes use
 Each stop, map marker title, group breakdown, accepted itinerary, budget view and shared text uses the same plan prices. The range separates included tickets/food/transport from optional additional allowances. Food shows a per-person range, rounded midpoint and group allowance. Price-enabled sharing includes these figures; unchecking Include price summary removes all monetary details. Local snapshots retain the exact accepted prices and source dates without silently refreshing them.
 
 Verification: pricing/domain/FX tests in `tests/travel-pricing.test.ts`, authenticated provider/AI budget cases in `tests/guide.test.ts`, and mobile currency/meal/share/refresh journeys in `tests/e2e/travel-pricing.spec.ts`. All provider fixtures remain confined to tests. No new paid API, client secret or environment key is required.
+
+## Local development request allowances
+
+The presentation setup uses `PROVIDER_DAILY_LIMIT=600` and `AI_DAILY_LIMIT=100` in `.env`. Restart the API after editing these values; the running process does not hot-reload environment files. Both local counters reset at 00:00 UTC and on process restart. The 101st AI attempt or 601st Google request is rejected before calling the provider; failed attempts also consume the allowance. Defaults without these environment values stay conservative (100 Google / 20 AI). Existing per-minute limits, duplicate-request protection, provider/model choice and billing remain unchanged. The local count is per server process and counts attempted requests, not billable matrix elements, tokens or a monetary ceiling.
+
+Local AI exhaustion returns `AI_BUDGET_LIMIT`; Google app exhaustion returns `PROVIDER_BUDGET_LIMIT`. Gemini upstream 429 returns `PROVIDER_QUOTA` and names the configured model. These are different limits. [Google's Gemini quotas](https://ai.google.dev/gemini-api/docs/rate-limits) are applied per project/model across RPM, TPM and RPD; daily provider quota resets at midnight Pacific time. Raising the app allowance does not raise Google's quota. Select the exact configured `GEMINI_MODEL` in AI Studio when checking limits; another model's chart does not describe this application's allowance. Users can explicitly turn AI planning off to use the existing deterministic planner; no silent model/fallback or automatic repeated provider requests are introduced.
