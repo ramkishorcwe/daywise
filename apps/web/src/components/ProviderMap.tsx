@@ -6,7 +6,7 @@ import { googleKeyIsValid } from '../../../../packages/data-adapters/src/google-
 
 import { loadMaps, subscribeMapFailures, mapAuthorizationFailed, authorizationMessage } from '../maps-sdk';
 const noPoints: { name: string; coordinates: Coordinate }[] = [];
-export default function ProviderMap({ route, points = noPoints, pick, activeIndex, onSelectStop }: { route?: RouteEstimate; points?: { name: string; coordinates: Coordinate }[]; pick?: (point: Coordinate) => void; activeIndex?: number; onSelectStop?: (index: number) => void }) {
+export default function ProviderMap({ route, points = noPoints, pick, activeIndex, onSelectStop, snapshot = false }: { route?: RouteEstimate; points?: { name: string; coordinates: Coordinate }[]; pick?: (point: Coordinate) => void; activeIndex?: number; onSelectStop?: (index: number) => void; snapshot?: boolean }) {
   const root = useRef<HTMLDivElement>(null), mapRef = useRef<google.maps.Map | null>(null), [error, setError] = useState(''), [retry, setRetry] = useState(0), [loading, setLoading] = useState(false);
   const visibleMarkers = useRef<Array<{ marker: google.maps.Marker; indices: number[] }>>([]), selection = useRef(onSelectStop); selection.current = onSelectStop;
   useEffect(() => { for (const row of visibleMarkers.current) { const selected = activeIndex !== undefined && row.indices.includes(activeIndex); row.marker.setAnimation?.(selected ? google.maps.Animation?.BOUNCE ?? null : null); if (selected) { const position = row.marker.getPosition?.(); if (position) mapRef.current?.panTo?.(position); } } }, [activeIndex, loading]);
@@ -17,7 +17,7 @@ export default function ProviderMap({ route, points = noPoints, pick, activeInde
     const key = import.meta.env.VITE_GOOGLE_MAPS_BROWSER_KEY;
     if (!key && !(typeof google !== 'undefined' && google.maps?.Map && google.maps.geometry?.encoding)) { setError('A restricted Google Maps browser key is needed to display the map. Set VITE_GOOGLE_MAPS_BROWSER_KEY in .env and restart the web server.'); return; }
     if (key && !googleKeyIsValid(key)) { setError('VITE_GOOGLE_MAPS_BROWSER_KEY must contain a valid Google API key value. Check .env and restart the web server.'); return; }
-    if (route && Date.parse(route.expiresAt) <= Date.now()) { setError('This estimate expired. Request a fresh route.'); return; }
+    if (route && !snapshot && Date.parse(route.expiresAt) <= Date.now()) { setError('This estimate expired. Request a fresh route.'); return; }
     if (!route && !points.length) { setError('Select a real destination or starting point before opening the map.'); return; }
     if (points.some(point => !coordinateSchema.safeParse(point.coordinates).success)) { setError('The selected map coordinates are invalid. Select the location again.'); return; }
     setLoading(true);
@@ -41,6 +41,6 @@ export default function ProviderMap({ route, points = noPoints, pick, activeInde
       setLoading(false);
     }).catch(failure => { if (!canceled) { setLoading(false); setError(failure instanceof Error ? failure.message : 'The map could not load. Retry.'); } });
     return () => { canceled = true; line?.setMap(null); markers.forEach(marker => marker.setMap(null)); visibleMarkers.current = []; click?.remove(); };
-  }, [route, points, pick, retry]);
+  }, [route, points, pick, retry, snapshot]);
   return <>{loading && <p role="status">Loading Google map…</p>}{error && <div className="error-box" role="alert">{error}<button type="button" className="text-button" onClick={() => setRetry(value => value + 1)}>Retry map</button></div>}<div ref={root} className="provider-map" aria-busy={loading} style={error ? { display: 'none' } : undefined} aria-label={route ? 'Google driving route estimate' : 'Google location selection map'} /></>;
 }

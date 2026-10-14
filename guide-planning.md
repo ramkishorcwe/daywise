@@ -120,3 +120,13 @@ Dinner generation is removed. Old saved dinner preference fields are accepted so
 No additional API key is needed. The existing server Places API (New), Geocoding and Routes keys and spend guards are reused. See [Google Nearby Search documentation](https://developers.google.com/maps/documentation/places/web-service/nearby-search) and [Routes usage and billing](https://developers.google.com/maps/documentation/routes/usage-and-billing). Matrices remain bounded to ten points.
 
 Coverage includes `tests/meals.test.ts`, API cases in `tests/guide.test.ts`, and mobile/saved-day/checkbox cases in `tests/e2e/guide.spec.ts`. Paid live testing is not required for this behavior change; isolated validation uses test providers.
+
+## Trip sharing, local recovery and price ranges
+
+The current live workspace is automatically saved in the browser under `daywise-live-active-v1`. Draft and accepted plans, accepted IDs, party/preferences, selected locations, price allowances and reported costs/progress are preserved separately. Writes are synchronous and schema validated; quota/access failures remain visible and keep the previous stored copy. Malformed/unsupported records are not overwritten. Delete local trip clears the active snapshot and its linked named preferences, then resets the workspace without allowing stale planner callbacks to recreate it. Unrelated browser storage and separately saved days are preserved.
+
+Restoration makes no GPS request and no automatic paid location/route request. Existing checked/expiry timestamps remain unchanged. A saved route remains readable; locations must be explicitly refreshed before route editing or regeneration, and new acceptance still requires review. The existing server and named-preference ID-only persistence are unchanged. Review provider retention before public deployment.
+
+Trip price summary uses the itinerary's whole-group minimum/maximum subtotal plus optional user-entered additional category ranges. These additional allowances are scoped to the exact route/budget and currency, never copied to a different plan. They are excluded from booked/actual ledgers and route feasibility calculations. Unpriced items remain explicit; a displayed range is never a provider quote or a guaranteed complete cost.
+
+Share trip freezes a reviewed text copy with destination-local schedule, stops, public Google place links and an optional price range. Start/return addresses and coordinates require opt-in. Notes, diet, child ages, expenses, backend IDs/tokens and credentials are excluded. Native device sharing is offered when supported, with copy/download/manual-copy fallbacks. Shared files are static and do not receive revisions. No public hosted link is fabricated.

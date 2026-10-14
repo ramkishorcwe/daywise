@@ -20,6 +20,16 @@ export default function AutoGuidePanel(props: GuidePanelProps) {
   function invalidate() { sequence.current++; abort.current?.abort(); setBusy(false); setResult(null); setAck(false); callbacks.current.onPreview(null); }
   useEffect(() => () => { sequence.current++; abort.current?.abort(); }, []);
   const previousBase = useRef(baseKey), previousDestination = useRef(`${props.destination?.id}:${props.date}`);
+  useEffect(() => {
+    const parsed = guidePreferencesSchema.safeParse({ ...preferences, adults: props.adults, childAges: props.childAges, groupBudget: props.budget.trim() ? Number(props.budget) : null, currency: props.currency || null, dietaryRules: props.dietaryRules });
+    if (!parsed.success) return;
+    callbacks.current.onPreferences(parsed.data, choices.flatMap(row => {
+      const placeId = bank.find(c => c.location.id === row.locationId)?.location.placeId;
+      if (!placeId) return [];
+      const { locationId: _id, ...own } = row;
+      return [{ ...own, placeId }];
+    }));
+  }, [baseKey, choices, bank]);
   if (!applied.current && props.initialPlan) applied.current = inputKey;
   useEffect(() => { if (previousBase.current !== baseKey) { previousBase.current = baseKey; invalidate(); } }, [baseKey]);
   useEffect(() => { const next = `${props.destination?.id}:${props.date}`; if (previousDestination.current === next) return; previousDestination.current = next; setBank([]); setChoices([]); generated.current = false; excluded.current.clear(); applied.current = ''; }, [props.destination?.id, props.date]);
