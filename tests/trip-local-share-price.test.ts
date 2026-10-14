@@ -6,6 +6,19 @@ import { localTripKey, readLocalTrip, writeLocalTrip, removeLocalTrip, type Loca
 import { priceAllowancesSchema, pricePlanKey, tripPrice } from '../apps/web/src/trip-price';
 import { tripShareText } from '../apps/web/src/trip-share';
 import { journeyLinks, whatsappItineraryText, whatsappUrl } from '../apps/web/src/journey-links';
+import { sharedSnapshot } from '../apps/web/src/shared-trip';
+import { sharedTripSchema } from '../packages/contracts/src/shared-trip';
+
+it('shared page snapshots exclude private endpoints, geometry, session credentials and preferences by default', () => {
+  const p = plan(); p.itinerary.start.receipt = 'A'.repeat(50);
+  const publicTrip = sharedSnapshot(p, 'A shared day', false, true), text = JSON.stringify(publicTrip);
+  for (const value of [p.itinerary.start.id, p.itinerary.start.receipt, 'private-start', '51.123456', 'test-only-polyline', 'childAges', 'dietaryRules']) expect(text).not.toContain(value);
+  expect(publicTrip).toHaveProperty('price'); expect(publicTrip).not.toHaveProperty('route');
+  const privateTrip = sharedSnapshot(p, '', true, false);
+  expect(privateTrip.start?.coordinates).toEqual(p.itinerary.start.coordinates); expect(privateTrip.route?.encodedPolyline).toBe(p.itinerary.route.encodedPolyline); expect(privateTrip).not.toHaveProperty('price');
+  expect(sharedTripSchema.safeParse({ ...publicTrip, mapUrl: 'javascript:alert(1)' }).success).toBe(false);
+  expect(sharedTripSchema.safeParse({ ...publicTrip, route: p.itinerary.route }).success).toBe(false);
+});
 
 // Mock provider evidence is confined to tests.
 const now = new Date().toISOString();
@@ -23,6 +36,14 @@ function storage() {
   const rows = new Map<string, string>();
   return { rows, getItem: (k: string) => rows.get(k) ?? null, setItem: (k: string, v: string) => { rows.set(k, v); }, removeItem: (k: string) => { rows.delete(k); } };
 }
+it('keeps hosted evidence receipts out of local trip snapshots without changing saved journey data', () => {
+  const store = storage(), value = trip();
+  value.accepted!.start.receipt = 'A'.repeat(50);
+  value.acceptedGuide!.itinerary = value.accepted!;
+  writeLocalTrip(store, value);
+  expect(store.getItem(localTripKey)).not.toContain('A'.repeat(50));
+  expect(readLocalTrip(store).trip?.accepted?.start.coordinates).toEqual(value.accepted!.start.coordinates);
+});
 it('whole-journey links preserve origin, ordered visits, independent return and travel mode', () => {
   const p = plan(); p.itinerary.route.mode = 'BICYCLE'; const links = journeyLinks(p.itinerary, true), query = new URL(links.overview).searchParams;
   expect(query.get('origin')).toBe('51.123456,-0.654321'); expect(query.get('destination')).toBe('51.987654,-0.112233'); expect(query.get('waypoints')).toBe('51.5,0'); expect(query.get('travelmode')).toBe('bicycling'); expect(query.get('api')).toBe('1');

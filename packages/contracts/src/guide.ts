@@ -40,7 +40,7 @@ export const guideFactsSchema = z.strictObject({
   containingPlaceIds: z.array(providerPlaceId).max(10).optional(), website: z.url().nullable(), providerUri: z.url().nullable(), description: z.string().max(2500).nullable(), checkedAt: z.iso.datetime(),
 });
 export type GuideFacts = z.infer<typeof guideFactsSchema>;
-export const candidateSchema = z.strictObject({ location: locationSchema, facts: guideFactsSchema, suggestedMinutes: z.number().int().min(10).max(240), reasons: z.array(z.string().max(500)).max(10), score: z.number().finite() });
+export const candidateSchema = z.strictObject({ receipt: z.string().regex(/^[A-Za-z0-9_-]{40,50000}$/).optional(), location: locationSchema, facts: guideFactsSchema, suggestedMinutes: z.number().int().min(10).max(240), reasons: z.array(z.string().max(500)).max(10), score: z.number().finite() });
 export type GuideCandidate = z.infer<typeof candidateSchema>;
 const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 export const guideDiscoverSchema = z.strictObject({ destinationId: z.string().uuid(), date: z.iso.date(), preferences: guidePreferencesSchema });

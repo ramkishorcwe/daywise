@@ -12,3 +12,11 @@
 .saved-card{min-width:0;overflow-wrap:anywhere}
 
 .start-point{flex-wrap:wrap}
+.shared-page { min-height: 100vh; background: #f8faf6; }
+.shared-page > header { display: flex; gap: 18px; align-items: center; justify-content: space-between; padding: 24px 5%; border-bottom: 1px solid #dce3d6; background: white; flex-wrap: wrap; }
+.shared-brand { font-size: 32px; font-weight: 800; color: #163e35; text-decoration: none; }
+.shared-page > main { max-width: 1320px; margin: auto; padding: 48px 5%; }
+.shared-page .live-card { margin-top: 24px; }
+.shared-stop { padding: 22px 0; border-bottom: 1px solid #e2e8df; }
+.shared-page dl > div { display: flex; justify-content: space-between; gap: 20px; padding: 12px 0; border-bottom: 1px solid #e2e8df; }
+@media (max-width: 600px) { .shared-page > main { padding: 28px 18px; } .shared-page > header { padding: 16px 18px; } .shared-page h1 { font-size: 30px; } .shared-page dl > div { flex-wrap: wrap; } }

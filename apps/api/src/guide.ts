@@ -14,6 +14,7 @@ import { ApiError } from './errors';
 import { pricedCandidate } from '../../../packages/domain/src/travel-pricing';
 import { FrankfurterRates } from '../../../packages/data-adapters/src/exchange-rates';
 import { mealSearchAnchors, chooseMealInsertion, validateMealDetours } from '../../../packages/domain/src/meal-planner';
+import { z } from 'zod';
 
 export function registerGuideRoutes(app: FastifyInstance, context: { options: ServerOptions; locations: LocationRegistry; guard: ProviderGuard; owner: (request: FastifyRequest) => string; interpreter: IntentInterpreter; assistant: AssistantService; catalog: CheckedCatalog }) {
   const { options, locations, guard, owner, interpreter, assistant, catalog } = context;
@@ -32,6 +33,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     if (reviewed?.admission) facts.admission = { ...reviewed.admission, source: 'reviewed_catalog', sourceUrl: reviewed.evidence.sourceUrl };
     if (reviewed?.openingHours?.date === date) facts.hours = { status: reviewed.openingHours.windows.length ? 'date_specific' : 'closed', windows: reviewed.openingHours.windows, description: ['Independently reviewed date-specific opening evidence.'], source: 'reviewed_catalog', sourceUrl: reviewed.evidence.sourceUrl };
     const candidate = candidateSchema.parse({ location, facts, suggestedMinutes: suggestedVisitMinutes(facts, p), ...candidateScore({ location, facts }, p) });
+    if (options.receipts) candidate.receipt = options.receipts.seal(who, 'guide', Date.parse(location.expiresAt), { date, candidate });
     records.set(location.id, { owner: who, date, candidate }); return candidate;
   }
   async function addMeals(who: string, body: GuidePlanRequest, destination: SelectedLocation, start: SelectedLocation, end: SelectedLocation, originalCandidates: GuideCandidate[], originalOrder: GuideStop[], originalMatrix: TravelMatrix, departure: number) {
@@ -52,7 +54,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
       const groups: GuidePlace[][] = [];
       const used = new Set(order.map(s => candidates.find(c => c.location.id === s.locationId)!.location.placeId));
       for (const anchor of anchors) {
-        guard.consume(); const results = await source.nearbyRestaurants(anchor.location.coordinates, body.preferences.meals!.nearbyMeters);
+        await guard.consume(); const results = await source.nearbyRestaurants(anchor.location.coordinates, body.preferences.meals!.nearbyMeters);
         groups.push(results.filter(raw => {
           const facts = factsFor(raw, body.date, destination.timezone!);
           return !used.has(raw.id) && facts.categories.includes('food') && facts.mealServices?.[kind] !== false && !['unknown', 'closed'].includes(facts.hours.status) && !(body.preferences.mobility === 'wheelchair' && facts.accessible === false) && !(body.preferences.childAges.length && facts.goodForChildren === false) && !(body.preferences.dietaryRules.length && facts.vegetarianOptions === false);
@@ -66,14 +68,14 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
       }
       const restaurants: GuideCandidate[] = [];
       for (const raw of shortlist) {
-        guard.consume(); const reversed = await options.locations!.reverse(raw.location);
+        await guard.consume(); const reversed = await options.locations!.reverse(raw.location);
         if (reversed.city?.countryCode !== destination.city!.countryCode) continue;
         const location = locations.add(who, { ...reversed, provider: 'google', source: 'search', placeId: raw.id, name: raw.displayName.text, address: raw.formattedAddress, coordinates: raw.location, types: raw.types, ...(raw.attributions ? { attributions: raw.attributions } : {}) });
         restaurants.push(await price(save(who, location, raw, body.date, destination.timezone!, body.preferences), body.preferences));
       }
       if (!restaurants.length) throw new ApiError(422, 'MEAL_NOT_FOUND', 'No nearby restaurant with usable opening hours and location evidence was found. Adjust the meal settings or uncheck Include meal; no restaurant was invented.');
       candidates = [...base, ...restaurants];
-      guard.consume(); matrix = await options.liveRoutes!.matrix!([start.coordinates, ...candidates.map(c => c.location.coordinates), end.coordinates], new Date(departure).toISOString(), body.preferences.travelMode);
+      await guard.consume(); matrix = await options.liveRoutes!.matrix!([start.coordinates, ...candidates.map(c => c.location.coordinates), end.coordinates], new Date(departure).toISOString(), body.preferences.travelMode);
       try { order = chooseMealInsertion(order, candidates, restaurants, body, destination, matrix, kind); }
       catch (error) { throw new ApiError(422, 'MEAL_INFEASIBLE', error instanceof Error ? error.message : 'No nearby meal fits the day.'); }
     }
@@ -83,11 +85,11 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     const body = guideDiscoverSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), source = provider();
     const localToday = new Intl.DateTimeFormat('en-CA', { timeZone: destination.timezone!, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     if (body.date < localToday || Date.parse(body.date) > Date.parse(localToday) + 7 * 86400000) throw new ApiError(422, 'GUIDE_DATE', 'Choose today or a date in the next seven days.');
-    guard.consume(); const raw = await source.discover(destination.name, destination.coordinates, body.preferences), candidates: GuideCandidate[] = [], warnings: string[] = [];
+    await guard.consume(); const raw = await source.discover(destination.name, destination.coordinates, body.preferences), candidates: GuideCandidate[] = [], warnings: string[] = [];
     const ranked = raw.filter(r => !body.preferences.visitedPlaceIds.includes(r.id)).map(r => ({ raw: r, facts: factsFor(r, body.date, destination.timezone!) })).filter(r => r.facts.categories.length && r.facts.hours.status !== 'closed' && !(body.preferences.mobility === 'wheelchair' && r.facts.accessible === false)).sort((a, b) => candidateScore({ location: { ...destination, name: a.raw.displayName.text }, facts: b.facts }, body.preferences).score - candidateScore({ location: { ...destination, name: b.raw.displayName.text }, facts: a.facts }, body.preferences).score).slice(0, 8);
     for (const item of ranked) {
       try {
-        guard.consume(); const reversed = await options.locations!.reverse(item.raw.location);
+        await guard.consume(); const reversed = await options.locations!.reverse(item.raw.location);
         if (reversed.city?.countryCode !== destination.city!.countryCode) { warnings.push('A discovery result could not be verified in the destination country and was excluded.'); continue; }
         const location = locations.add(who, { ...reversed, provider: 'google', source: 'search', placeId: item.raw.id, name: item.raw.displayName.text, address: item.raw.formattedAddress, coordinates: item.raw.location, types: item.raw.types, ...(item.raw.attributions ? { attributions: item.raw.attributions } : {}) });
         candidates.push(await price(save(who, location, item.raw, body.date, destination.timezone!, body.preferences), body.preferences));
@@ -100,7 +102,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
   app.post('/api/guide/candidate', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async request => {
     const body = guideCandidateRequestSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), location = locations.get(who, body.locationId);
     if (!location.placeId || location.source !== 'search') throw new ApiError(422, 'GUIDE_PLACE_REQUIRED', 'Search and select a real attraction before adding it to the guide.');
-    guard.consume(); const raw = await provider().facts(location.placeId); return price(save(who, location, raw, body.date, destination.timezone!, body.preferences), body.preferences);
+    await guard.consume(); const raw = await provider().facts(location.placeId); return price(save(who, location, raw, body.date, destination.timezone!, body.preferences), body.preferences);
   });
   app.post('/api/guide/plan', { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async request => {
     const body = guidePlanRequestSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), start = locations.get(who, body.startId), end = body.returnToStart ? start : locations.get(who, body.endId!);
@@ -118,7 +120,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     const facts = candidates.map(c => ({ id: c.location.id, name: c.location.name, categories: c.facts.categories, rating: c.facts.rating, reviews: c.facts.reviews, facts: c.facts, suggestedMinutes: c.suggestedMinutes }));
     let ranking: string[] = [], mode: 'local' | 'openai' | 'gemini' = 'local';
     if (body.orderMode === 'smart' && body.preferences.useAI && interpreter.mode !== 'local' && interpreter.rankGuide) {
-      assistant.reserveAI(); const result = guideRankingSchema.parse(await interpreter.rankGuide({ preferences: body.preferences, candidates: facts, trip: { city: destination.name, date: body.date, timezone: destination.timezone!, startTime: body.startTime, endTime: body.endTime }, travelMatrix: matrix }));
+      await assistant.reserveAI(); const result = guideRankingSchema.parse(await interpreter.rankGuide({ preferences: body.preferences, candidates: facts, trip: { city: destination.name, date: body.date, timezone: destination.timezone!, startTime: body.startTime, endTime: body.endTime }, travelMatrix: matrix }));
       const suppliedIds = [...result.rankedIds, ...(result.visits ?? []).map(v => v.locationId)];
       if (new Set(result.rankedIds).size !== result.rankedIds.length || new Set(result.visits?.map(v => v.locationId)).size !== (result.visits?.length ?? 0) || suppliedIds.some(id => !candidates.some(c => c.location.id === id))) throw new ApiError(422, 'AI_UNKNOWN_CANDIDATE', 'AI referenced an unverified place. Your itinerary was not changed.');
       ranking = result.rankedIds; mode = interpreter.mode;
@@ -137,7 +139,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
         } else throw new ApiError(422, 'GUIDE_INFEASIBLE', error instanceof Error ? error.message : 'No feasible day.');
       }
       const final = await addMeals(who, body, destination, start, end, candidates, selected.order, matrix, departure);
-      guard.consume(); const route = await options.liveRoutes!.itinerary(start.coordinates, end.coordinates, final.order.map(s => final.candidates.find(c => c.location.id === s.locationId)!.location.coordinates), new Date(departure).toISOString(), false, undefined, body.preferences.travelMode);
+      await guard.consume(); const route = await options.liveRoutes!.itinerary(start.coordinates, end.coordinates, final.order.map(s => final.candidates.find(c => c.location.id === s.locationId)!.location.coordinates), new Date(departure).toISOString(), false, undefined, body.preferences.travelMode);
       try {
         const result = guideResult(body, destination, start, end, final.candidates, final.order, route, { originalTravelMinutes: selected.originalTravelMinutes, selectedTravelMinutes: route.durationSeconds / 60, evaluatedSequences: selected.evaluated }, mode);
         if (usedAlternatives) result.itinerary.warnings.push('Selected ranked alternative attractions because the first AI shortlist did not fit the time or budget.');
@@ -150,4 +152,11 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     throw new ApiError(422, 'GUIDE_FINAL_ROUTE_INFEASIBLE', 'No final Google route fits the available day. Keep your choices and adjust the schedule.');
     });
   });
+  return { restore(who: string, receipt: string) {
+    if (!options.receipts) throw new ApiError(400, 'EVIDENCE_UNAVAILABLE', 'Hosted evidence receipts are unavailable.');
+    const row = z.strictObject({ date: z.iso.date(), candidate: candidateSchema }).parse(options.receipts.open(who, 'guide', receipt));
+    locations.get(who, row.candidate.location.id);
+    cleanup(); if (records.size >= 500 && !records.has(row.candidate.location.id)) throw new ApiError(429, 'GUIDE_CAPACITY', 'The temporary guide queue is full. Retry later.');
+    records.set(row.candidate.location.id, { owner: who, ...row });
+  } };
 }

@@ -11,6 +11,7 @@ import { localAuthenticator } from '../apps/api/src/auth';
 import { LocalTripStore } from '../apps/api/src/store';
 import { zonedTime } from '../packages/domain/src/time';
 import type { FastifyInstance } from 'fastify';
+import { EvidenceReceipts } from '../apps/api/src/receipts';
 
 // Deterministic test-only provider facts; never imported by the production app.
 const date = new Date(Date.now() + 86400000).toISOString().slice(0, 10), city = { placeId: 'canonical-provider-city', name: 'Provider city', countryCode: 'GB' };
@@ -72,8 +73,27 @@ async function api(extra: Partial<Parameters<typeof createServer>[0]> = {}, prof
   const discovery = await post('/api/guide/discover', { destinationId: destination.id, date, preferences: profile });
   const candidates = discovery.statusCode === 200 ? discovery.json().candidates as GuideCandidate[] : [];
   const body = input(candidates.length ? candidates : [candidate(999)]); body.destinationId = destination.id; body.startId = destination.id; body.preferences = profile;
-  return { app, post, body, candidates, auth, matrixCall, routeCall, discovery };
+  return { app, post, body, candidates, auth, token, matrixCall, routeCall, discovery };
 }
+
+it('plans on a new hosted replica with authentic location and guide receipts, and rejects forged facts', async () => {
+  const receipts = new EvidenceReceipts(randomBytes(32).toString('base64url'));
+  const first = await api({ receipts });
+  const second = await createServer({ auth: first.auth, store: new LocalTripStore(), fixtures: false, webOrigin: 'http://127.0.0.1:5174', receipts, liveRoutes: { matrix: first.matrixCall, itinerary: first.routeCall } as unknown as Parameters<typeof createServer>[0]['liveRoutes'] }); servers.push(second);
+  // The destination is also the start in this regression. Its receipt was
+  // returned by the first replica; it is never reconstructed from coordinates.
+  const destination = (await first.post('/api/locations/resolve', { placeId: 'provider-destination', sessionToken: randomUUID(), destinationCity: true })).json<SelectedLocation>();
+  first.body.destinationId = destination.id; first.body.startId = destination.id;
+  const payload = { ...first.body, _evidence: { locations: [destination.receipt!, ...first.candidates.map(c => c.location.receipt!)], guides: first.candidates.map(c => c.receipt!) } };
+  const result = await second.inject({ method: 'POST', url: '/api/guide/plan', headers: { authorization: `Bearer ${first.token}`, 'idempotency-key': randomUUID() }, payload });
+  expect(result.statusCode).toBe(200); expect(result.json().itinerary.start.id).toBe(destination.id);
+  const forged = structuredClone(payload); forged._evidence.guides[0] = 'A'.repeat(60);
+  const invalid = await second.inject({ method: 'POST', url: '/api/guide/plan', headers: { authorization: `Bearer ${first.token}`, 'idempotency-key': randomUUID() }, payload: forged });
+  expect(invalid.statusCode).toBe(409); expect(invalid.json().error.code).toBe('EVIDENCE_UNAVAILABLE');
+  // A different valid local token creates another owner and must be rejected.
+  const stranger = await second.inject({ method: 'POST', url: '/api/guide/plan', headers: { authorization: `Bearer ${first.auth.issue!().token}`, 'idempotency-key': randomUUID() }, payload });
+  expect(stranger.statusCode).toBe(409); expect(stranger.json().error.code).toBe('EVIDENCE_UNAVAILABLE');
+});
 function indianProviders(): Partial<Parameters<typeof createServer>[0]> {
   const identity = { placeId: 'canonical-provider-city', name: 'Jaipur', countryCode: 'IN' };
   return { pricingRates: { quote: async () => ({ rate: 0.01, date, sourceUrl: 'https://api.frankfurter.dev/v2/rate/inr/usd' }) },

@@ -4,11 +4,12 @@ import { checkedCitySchema, type CheckedCity } from '../../../packages/data-adap
 import { z } from 'zod';
 import { assistantReplySchema, type Proposal } from '../../../packages/contracts/src/assistant';
 import { readinessSchema } from '../../../packages/contracts/src/readiness';
+import { rememberEvidence, attachEvidence, clearEvidence } from './evidence-cache';
 
 let token: string | null = null;
 let refreshToken: (() => Promise<string>) | null = null;
 export const backendConnected = () => token !== null;
-export function disconnectBackend() { token = null; refreshToken = null; }
+export function disconnectBackend() { token = null; refreshToken = null; clearEvidence(); }
 export class HttpError extends Error { constructor(public status: number, public code: string, message: string) { super(message); } }
 export async function request<T>(path: string, init: RequestInit = {}, authenticated = true): Promise<T> {
   if (authenticated && refreshToken) token = await refreshToken();
@@ -19,10 +20,11 @@ export async function request<T>(path: string, init: RequestInit = {}, authentic
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   const timedOut = () => new HttpError(408, 'REQUEST_TIMEOUT', `${path === '/guide/plan' ? 'Itinerary planning' : path === '/guide/discover' ? 'Attraction discovery' : 'The request'} took longer than ${milliseconds / 1000} seconds. Retry when ready; no automatic retry was sent. Your accepted trip is preserved.`);
   let response: Response;
-  try { response = await fetch(`/api${path}`, { ...init, headers, signal }); }
-  catch (error) { if (init.signal?.aborted) throw error; if (timeout.aborted) throw timedOut(); throw new Error('The backend is unavailable. Start it with npm run dev:api, then retry.'); }
+  try { response = await fetch(`/api${path}`, { ...init, ...(typeof init.body === 'string' ? { body: attachEvidence(init.body) } : {}), headers, signal }); }
+  catch (error) { if (init.signal?.aborted) throw error; if (timeout.aborted) throw timedOut(); throw new Error(import.meta.env.DEV ? 'The backend is unavailable. Start it with npm run dev:api, then retry.' : 'Daywise could not reach its server. Check your connection and retry; your saved trip is preserved.'); }
   let data: unknown; try { data = await response.json(); } catch (error) { if (init.signal?.aborted) throw error; if (timeout.aborted) throw timedOut(); throw new Error('The backend returned an unreadable response.'); }
   if (!response.ok) { const failure = data as { error?: { code?: string; message?: string } }; throw new HttpError(response.status, failure.error?.code ?? 'REQUEST_FAILED', failure.error?.message ?? 'The request failed.'); }
+  rememberEvidence(data);
   return data as T;
 }
 export const capabilities = async () => apiCapabilitiesSchema.parse(await request('/health', {}, false));

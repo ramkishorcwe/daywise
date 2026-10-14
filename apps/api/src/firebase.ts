@@ -1,4 +1,4 @@
-import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
+import { applicationDefault, cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import { remoteTripSchema, type RemoteTrip } from '../../../packages/contracts/src/api';
@@ -6,10 +6,17 @@ import type { Authenticator } from './auth';
 import type { TripStore } from './store';
 import { ApiError, missing, stale } from './errors';
 
-export function firebaseAdapters(projectId: string): { auth: Authenticator; store: TripStore } {
-  const app = getApps()[0] ?? initializeApp({ projectId, credential: applicationDefault() });
+export function firebaseAdapters(projectId: string): { auth: Authenticator; store: TripStore; db: Firestore } {
+  let credential;
+  if (process.env.FIREBASE_ADMIN_CREDENTIALS) {
+    const value = JSON.parse(process.env.FIREBASE_ADMIN_CREDENTIALS);
+    if (value.project_id !== projectId) throw new Error('Firebase admin credentials must belong to FIREBASE_PROJECT_ID.');
+    credential = cert(value);
+  } else credential = applicationDefault();
+  const app = getApps()[0] ?? initializeApp({ projectId, credential });
   const auth = getAuth(app);
-  return { auth: { mode: 'firebase', async verify(token) { try { return (await auth.verifyIdToken(token, true)).uid; } catch { throw new ApiError(401, 'UNAUTHENTICATED', 'Your session is unavailable. Reconnect and try again.'); } } }, store: new FirestoreTripStore(getFirestore(app)) };
+  const db = getFirestore(app);
+  return { db, auth: { mode: 'firebase', async verify(token) { try { return (await auth.verifyIdToken(token, true)).uid; } catch { throw new ApiError(401, 'UNAUTHENTICATED', 'Your session is unavailable. Reconnect and try again.'); } } }, store: new FirestoreTripStore(db) };
 }
 export class FirestoreTripStore implements TripStore {
   constructor(private db: Firestore) {}

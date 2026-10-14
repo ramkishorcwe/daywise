@@ -6,6 +6,7 @@ import { coordinateSchema, routeEstimateSchema } from './api';
 export const providerPlaceId = z.string().regex(/^[A-Za-z0-9_-]{5,}$/);
 export const cityIdentitySchema = z.strictObject({ placeId: providerPlaceId, name: z.string().trim().min(1).max(300), countryCode: z.string().regex(/^[A-Z]{2}$/) });
 export const locationSchema = z.strictObject({
+  receipt: z.string().regex(/^[A-Za-z0-9_-]{40,50000}$/).optional(),
   id: z.string().uuid(), placeId: providerPlaceId.nullable(), provider: z.enum(['google', 'device']), source: z.enum(['search', 'gps', 'pin', 'saved']),
   name: z.string().trim().min(1).max(300), address: z.string().trim().min(1).max(1000).nullable(), coordinates: coordinateSchema,
   addressStatus: z.enum(['resolved', 'unresolved']).optional(), receiptStatus: z.enum(['local', 'registered']).optional(),
