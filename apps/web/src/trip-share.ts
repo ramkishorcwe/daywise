@@ -1,4 +1,5 @@
 import { stopPriceLines } from './stop-price';
+import { journeyLinkText } from './journey-links';
 import type { GuidePlan } from '../../../packages/contracts/src/guide';
 import { formatTime } from '../../../packages/domain/src/time-format';
 import { priceRange, tripPrice, type PriceAllowances } from './trip-price';
@@ -18,6 +19,6 @@ export function tripShareText(plan: GuidePlan, title: string, includePrivatePoin
   });
   lines.push('', includePrivatePoints ? `Return ${time(t.finishAt)}: ${t.end.address ?? t.end.name}\n${t.end.coordinates.latitude}, ${t.end.coordinates.longitude}` : `Return ${time(t.finishAt)} · return point omitted`);
   if (includePrice) { const p = tripPrice(plan, allowances); lines.push('', `Group price estimate: ${priceRange(p.minimum, p.maximum, p.currency)}`, ...(plan.budget.breakdown ? [`Per-person trip estimate: ${priceRange(p.minimum / plan.budget.breakdown.people, p.maximum / plan.budget.breakdown.people, p.currency)}`, ...(['tickets', 'food', 'transport'] as const).map(category => `${category}: ${priceRange(plan.budget.breakdown![category].minimum, plan.budget.breakdown![category].maximum, p.currency)} for group`)] : []), p.partial ? 'Partial estimate: unpriced items remain. Allowances are unverified.' : 'Estimate, not a guaranteed price.'); }
-  lines.push('', 'Confirm opening hours, fees and food requirements before visiting. Travel times may change; this copy does not receive updates.', 'Google Maps');
+  lines.push('', journeyLinkText(t, includePrivatePoints), '', 'Confirm opening hours, fees and food requirements before visiting. Travel times may change; this copy does not receive updates.', 'Google Maps');
   return lines.join('\n');
 }

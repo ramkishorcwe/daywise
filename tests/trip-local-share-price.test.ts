@@ -5,6 +5,7 @@ import type { SelectedLocation } from '../packages/contracts/src/locations';
 import { localTripKey, readLocalTrip, writeLocalTrip, removeLocalTrip, type LocalTrip } from '../apps/web/src/live-session';
 import { priceAllowancesSchema, pricePlanKey, tripPrice } from '../apps/web/src/trip-price';
 import { tripShareText } from '../apps/web/src/trip-share';
+import { journeyLinks, whatsappItineraryText, whatsappUrl } from '../apps/web/src/journey-links';
 
 // Mock provider evidence is confined to tests.
 const now = new Date().toISOString();
@@ -22,6 +23,33 @@ function storage() {
   const rows = new Map<string, string>();
   return { rows, getItem: (k: string) => rows.get(k) ?? null, setItem: (k: string, v: string) => { rows.set(k, v); }, removeItem: (k: string) => { rows.delete(k); } };
 }
+it('whole-journey links preserve origin, ordered visits, independent return and travel mode', () => {
+  const p = plan(); p.itinerary.route.mode = 'BICYCLE'; const links = journeyLinks(p.itinerary, true), query = new URL(links.overview).searchParams;
+  expect(query.get('origin')).toBe('51.123456,-0.654321'); expect(query.get('destination')).toBe('51.987654,-0.112233'); expect(query.get('waypoints')).toBe('51.5,0'); expect(query.get('travelmode')).toBe('bicycling'); expect(query.get('api')).toBe('1');
+  p.itinerary.end = p.itinerary.start; const same = new URL(journeyLinks(p.itinerary, true).overview).searchParams; expect(same.get('destination')).toBe(same.get('origin'));
+});
+it('private points are absent from shared URLs and WhatsApp unless explicitly included', () => {
+  const p = plan(), publicLink = journeyLinks(p.itinerary, false).overview, text = whatsappItineraryText(p, 'My day & friends 😊', false, true);
+  for (const privateValue of ['51.123456', '-0.112233', 'private-start', 'private-return', p.itinerary.start.id, 'test-only-polyline']) { expect(publicLink).not.toContain(privateValue); expect(text).not.toContain(privateValue); }
+  const url = new URL(whatsappUrl(text)); expect(url.hostname).toBe('wa.me'); expect(url.searchParams.get('text')).toBe(text); expect(text).toContain('Group estimate:');
+  const full = whatsappItineraryText(p, '', true, false); expect(full).toContain('51.123456'); expect(full).not.toContain('Group estimate:'); expect(full).not.toContain('127.0.0.1');
+});
+it('mobile map sections cover every leg in order with at most three intermediate stops', () => {
+  const p = plan(); p.itinerary.stops = Array.from({ length: 7 }, (_, i) => ({ ...p.itinerary.stops[0], location: { ...p.itinerary.stops[0].location, id: randomUUID(), placeId: `provider-stop-${i}`, name: `Stop ${i}`, coordinates: { latitude: 51.5 + i / 100, longitude: i / 100 } } }));
+  const links = journeyLinks(p.itinerary, true); expect(links.sections).toHaveLength(2);
+  const covered = links.sections.flatMap(s => Array.from({ length: s.to - s.from }, (_, i) => s.from + i)); expect(covered).toEqual(Array.from({ length: 8 }, (_, i) => i));
+  for (const section of links.sections) { const q = new URL(section.url).searchParams; expect(q.get('waypoints')?.split('|').length ?? 0).toBeLessThanOrEqual(3); expect(q.get('origin')).toBe(`${links.points[section.from].coordinates.latitude},${links.points[section.from].coordinates.longitude}`); }
+  expect(new URL(links.sections[0].url).searchParams.get('destination')).toBe(new URL(links.sections[1].url).searchParams.get('origin'));
+});
+it('long valid place identifiers are omitted without changing coordinates or creating an oversized Maps URL', () => {
+  const p = plan(); p.itinerary.start.placeId = 'x'.repeat(3000); p.itinerary.stops[0].location.placeId = 'y'.repeat(3000);
+  const q = new URL(journeyLinks(p.itinerary, true).overview).searchParams; expect(q.get('origin')).toBe('51.123456,-0.654321'); expect(q.get('waypoints')).toBe('51.5,0'); expect(q.has('origin_place_id')).toBe(false); expect(q.has('waypoint_place_ids')).toBe(false);
+  expect(journeyLinks(p.itinerary, true).overview.length).toBeLessThanOrEqual(2048); expect(journeyLinks(p.itinerary, false).overview.length).toBeLessThanOrEqual(2048);
+});
+it('GPS endpoints keep exact coordinates rather than navigating to a reverse-geocoded building ID', () => {
+  const p = plan(); p.itinerary.start.source = 'gps'; p.itinerary.end.source = 'pin';
+  const q = new URL(journeyLinks(p.itinerary, true).overview).searchParams; expect(q.has('origin_place_id')).toBe(false); expect(q.has('destination_place_id')).toBe(false); expect(q.get('origin')).toBe('51.123456,-0.654321');
+});
 it('restores draft and accepted snapshots independently with their original identities and expiry', () => {
   const store = storage(), value = trip(); value.title = 'Edited draft'; value.startTime = '10:00';
   writeLocalTrip(store, value); const restored = readLocalTrip(store);
