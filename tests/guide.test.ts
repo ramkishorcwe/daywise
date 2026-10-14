@@ -64,16 +64,61 @@ it('matrix handles omitted protobuf zero indices and unavailable edges without f
 it('AI ranks only supplied IDs, rejects hallucinated IDs, and never receives GPS coordinates', async () => { const cs = [candidate(1), candidate(2)], context = { preferences: preferences(), candidates: cs.map(c => ({ id: c.location.id, name: c.location.name, categories: c.facts.categories, rating: c.facts.rating, reviews: c.facts.reviews })) }; const request = vi.fn<typeof fetch>(async () => Response.json({ status: 'completed', output: [{ type: 'function_call', name: 'rank_verified_candidates', arguments: JSON.stringify({ rankedIds: [randomUUID()], interests: ['history'] }) }] })); await expect(new OpenAIInterpreter('mock-key', 'configured-model', request).rankGuide(context)).rejects.toThrow('unverified'); expect(JSON.parse(request.mock.calls[0][1]!.body as string).store).toBe(false); expect(request.mock.calls[0][1]!.body).not.toContain('latitude'); });
 
 const servers: FastifyInstance[] = []; afterEach(async () => { vi.unstubAllGlobals(); await Promise.all(servers.splice(0).map(s => s.close())); });
-async function api(extra: Partial<Parameters<typeof createServer>[0]> = {}) {
+async function api(extra: Partial<Parameters<typeof createServer>[0]> = {}, profile = preferences()) {
   const auth = localAuthenticator(randomBytes(32)), matrixCall = vi.fn<NonNullable<LiveRouteProvider['matrix']>>(async points => matrix(points.length - 2)), routeCall = vi.fn<LiveRouteProvider['itinerary']>(async (_start, _end, stops, departureTime, _optimize, _signal, mode = 'DRIVE') => ({ provider: 'google_routes', mode, durationSeconds: (stops.length + 1) * 600, distanceMeters: (stops.length + 1) * 3000, encodedPolyline: 'test-only-polyline', departureTime, fetchedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300000).toISOString(), trafficBasis: 'prediction_for_departure', persistence: 'memory_only', legs: Array.from({ length: stops.length + 1 }, () => ({ durationSeconds: 600, distanceMeters: 3000 })), optimizedOrder: stops.map((_p, i) => i) }));
   const app = await createServer({ auth, store: new LocalTripStore(), fixtures: false, webOrigin: 'http://127.0.0.1:5174', locations: { autocomplete: async () => ({ provider: 'google', suggestions: [] }), details: async id => ({ placeId: id, name: 'Provider city', address: 'Provider address', coordinates: { latitude: 51, longitude: 0 }, types: ['locality'] }), reverse: async coordinates => { const value = location(); return { ...value, coordinates }; }, timezone: async () => 'UTC' }, guide: { discover: async () => [rawPlace('provider-visit-one'), rawPlace('provider-visit-two')], facts: async id => rawPlace(id) }, liveRoutes: { matrix: matrixCall, itinerary: routeCall } as unknown as Parameters<typeof createServer>[0]['liveRoutes'], ...extra }); servers.push(app);
   const token = auth.issue!().token, post = (path: string, body: unknown, key = randomUUID(), otherToken = token) => app.inject({ method: 'POST', url: path, headers: { authorization: `Bearer ${otherToken}`, 'idempotency-key': key, 'content-type': 'application/json' }, payload: JSON.stringify(body) });
   const destination = (await post('/api/locations/resolve', { placeId: 'provider-destination', sessionToken: randomUUID(), destinationCity: true })).json<SelectedLocation>();
-  const discovery = await post('/api/guide/discover', { destinationId: destination.id, date, preferences: preferences() });
+  const discovery = await post('/api/guide/discover', { destinationId: destination.id, date, preferences: profile });
   const candidates = discovery.statusCode === 200 ? discovery.json().candidates as GuideCandidate[] : [];
-  const body = input(candidates); body.destinationId = destination.id; body.startId = destination.id;
+  const body = input(candidates.length ? candidates : [candidate(999)]); body.destinationId = destination.id; body.startId = destination.id; body.preferences = profile;
   return { app, post, body, candidates, auth, matrixCall, routeCall, discovery };
 }
+function indianProviders(): Partial<Parameters<typeof createServer>[0]> {
+  const identity = { placeId: 'canonical-provider-city', name: 'Jaipur', countryCode: 'IN' };
+  return { pricingRates: { quote: async () => ({ rate: 0.01, date, sourceUrl: 'https://api.frankfurter.dev/v2/rate/inr/usd' }) },
+    locations: { autocomplete: async () => ({ provider: 'google', suggestions: [] }), details: async id => ({ placeId: id, name: 'Jaipur', address: 'Test city address', coordinates: { latitude: 26, longitude: 75 }, types: ['locality'] }), reverse: async coordinates => ({ ...location(), coordinates, city: identity }), timezone: async () => 'UTC' },
+    guide: { discover: async () => ['Nahargarh Fort', 'City Palace', 'Amber Palace'].map((name, i) => ({ ...rawPlace(`provider-priced-${i}`), displayName: { text: name }, location: { latitude: 26 + i / 100, longitude: 75 } })), facts: async id => rawPlace(id) } };
+}
+it('real-provider discovery supplies tariffs before AI and chooses affordable visits without altering the start/return', async () => {
+  const a = await api(indianProviders(), guidePreferencesSchema.parse({ ...preferences(), currency: 'INR', travelMode: 'WALK', groupBudget: 250 }));
+  expect(a.discovery.statusCode, a.discovery.body).toBe(200); expect(a.candidates.map(c => c.facts.admission?.minimum).sort((a,b) => a!-b!)).toEqual([100,200,400]);
+  const r = await a.post('/api/guide/plan', a.body); expect(r.statusCode, r.body).toBe(200); const p = r.json();
+  expect(p.itinerary.stops.map((s: { location: SelectedLocation }) => s.location.name)).toEqual(['Nahargarh Fort']);
+  expect(p.budget.breakdown.tickets.maximum).toBe(200); expect(p.stops[0].groupCost.maximum).toBe(200); expect(p.itinerary.end.id).toBe(a.body.startId);
+  a.body.stops.find(s => a.candidates.find(c => c.location.id === s.locationId)!.location.name === 'City Palace')!.mustVisit = true;
+  expect((await a.post('/api/guide/plan', a.body)).statusCode).toBe(422);
+});
+it('reprices an existing candidate receipt when visitor eligibility or currency changes', async () => {
+  const a = await api(indianProviders(), guidePreferencesSchema.parse({ ...preferences(), currency: 'INR', travelMode: 'WALK' }));
+  a.body.stops = a.body.stops.filter(s => a.candidates.find(c => c.location.id === s.locationId)!.location.name === 'Nahargarh Fort');
+  a.body.preferences.visitorPricing = 'foreign'; let r = await a.post('/api/guide/plan', a.body); expect(r.statusCode, r.body).toBe(200); expect(r.json().stops[0].cost.minimum).toBe(600);
+  a.body.preferences.visitorPricing = 'auto'; a.body.preferences.currency = 'USD'; r = await a.post('/api/guide/plan', a.body); expect(r.statusCode, r.body).toBe(200);
+  expect(r.json().stops[0].cost).toMatchObject({ minimum: 6, currency: 'USD', original: { minimum: 600, currency: 'INR' } }); expect(r.json().budget.groupKnownMaximum).toBe(12);
+});
+it('Gemini receives price evidence and bounded ranked alternatives repair an unaffordable first shortlist', async () => {
+  const rankGuide = vi.fn(async (context: import('../packages/data-adapters/src/assistant').GuideAIContext) => ({ rankedIds: context.candidates.map(c => c.id), interests: ['history' as const], visits: [{ locationId: context.candidates.find(c => c.name === 'City Palace')!.id, durationMinutes: 60, timeBand: 'morning' as const }] }));
+  const a = await api({ ...indianProviders(), interpreter: { mode: 'gemini', rankGuide, interpret: async () => ({ intent: 'summary', minutes: null, pace: null, placeId: null }) } }, guidePreferencesSchema.parse({ ...preferences(), currency: 'INR', travelMode: 'WALK', groupBudget: 250 }));
+  const r = await a.post('/api/guide/plan', a.body); expect(r.statusCode, r.body).toBe(200); expect(r.json().itinerary.stops[0].location.name).toBe('Nahargarh Fort');
+  expect(r.json().itinerary.warnings.join(' ')).toContain('ranked alternative'); expect((rankGuide.mock.calls[0][0].candidates.find(c => c.name === 'City Palace')!.facts as import('../packages/contracts/src/guide').GuideFacts).admission!.minimum).toBe(400);
+});
+it('failed FX conversion gives a retryable error before routing, never an unconverted foreign-price plan', async () => {
+  const a = await api({ ...indianProviders(), pricingRates: { quote: async () => { throw new Error('unavailable'); } } }, guidePreferencesSchema.parse({ ...preferences(), currency: 'USD' }));
+  expect(a.discovery.statusCode).toBe(503); expect(a.discovery.json().error.code).toBe('PRICE_CONVERSION_UNAVAILABLE'); expect(a.matrixCall).not.toHaveBeenCalled(); expect(a.routeCall).not.toHaveBeenCalled();
+});
+it('automatically priced real restaurant candidates charge one meal per traveler and zero when unchecked', async () => {
+  const providers = indianProviders(); const guide = providers.guide!;
+  guide.nearbyRestaurants = async () => [{ ...rawPlace('provider-priced-meal'), types: ['restaurant'], displayName: { text: 'Provider priced restaurant' }, location: { latitude: 26, longitude: 75 }, priceLevel: 'PRICE_LEVEL_MODERATE' }];
+  const a = await api(providers, guidePreferencesSchema.parse({ ...preferences(), currency: 'INR', travelMode: 'WALK', mealBreak: true, groupBudget: 10000 }));
+  a.body.startTime = '12:00'; a.body.orderMode = 'manual'; a.body.stops = a.body.stops.slice(0, 2); a.body.stops.forEach(s => { s.durationMinutes = 60; });
+  a.matrixCall.mockImplementation(async points => Array.from({ length: points.length }, () => Array.from({ length: points.length }, () => ({ durationSeconds: 120, distanceMeters: 500 }))));
+  const original = a.routeCall.getMockImplementation()!;
+  a.routeCall.mockImplementation(async (...args) => { const r = await original(...args); return { ...r, durationSeconds: r.legs.length * 120, distanceMeters: r.legs.length * 500, legs: r.legs.map(() => ({ durationSeconds: 120, distanceMeters: 500 })) }; });
+  let r = await a.post('/api/guide/plan', a.body); expect(r.statusCode, r.body).toBe(200); const p = r.json();
+  expect(p.stops.filter((s: { mealKind?: string }) => s.mealKind)).toHaveLength(1);
+  expect(p.budget.breakdown.food).toEqual({ minimum: 600, maximum: 1200 }); expect(p.stops.find((s: { mealKind?: string }) => s.mealKind).mealCost).toMatchObject({ minimum: 300, maximum: 600, basis: 'person' });
+  a.body.preferences.mealBreak = false; r = await a.post('/api/guide/plan', a.body); expect(r.statusCode, r.body).toBe(200); expect(r.json().budget.breakdown.food.maximum).toBe(0); expect(r.json().itinerary.end.id).toBe(a.body.startId);
+});
 it('authenticated discovery, planning and return use registered real-provider coordinates and never reorder the final schedule in Google', async () => { const a = await api(); expect(a.discovery.statusCode).toBe(200); const response = await a.post('/api/guide/plan', a.body); expect(response.statusCode).toBe(200); expect(response.json().itinerary.end.id).toBe(a.body.startId); expect(a.routeCall.mock.calls[0][4]).toBe(false); expect(response.json().budget.status).toBe('unknown'); });
 it('guide planning rejects foreign receipts, duplicate submissions and invalid selections before repeated provider calls', async () => { const a = await api(), key = randomUUID(); expect((await a.post('/api/guide/plan', a.body, key)).statusCode).toBe(200); expect((await a.post('/api/guide/plan', a.body, key)).statusCode).toBe(409); expect(a.matrixCall).toHaveBeenCalledTimes(1); expect((await a.post('/api/guide/plan', a.body, randomUUID(), a.auth.issue!().token)).statusCode).toBe(409); expect((await a.post('/api/guide/plan', { ...a.body, stops: [{ ...a.body.stops[0], locationId: randomUUID() }] })).statusCode).toBe(409); });
 it('routing errors leave the guide editable and never fabricate a successful plan', async () => { const a = await api(); a.routeCall.mockImplementation(async () => { throw new Error('Unexpected test failure'); }); const response = await a.post('/api/guide/plan', a.body); expect(response.statusCode).toBe(500); expect(response.json().itinerary).toBeUndefined(); });

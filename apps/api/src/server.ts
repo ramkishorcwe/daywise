@@ -29,7 +29,10 @@ import { webOriginPolicy } from './web-origin';
 import { registerGuideRoutes } from './guide';
 import type { GuidePlacesProvider } from '../../../packages/data-adapters/src/google-guide';
 
+import type { ExchangeRates } from '../../../packages/data-adapters/src/exchange-rates';
+
 export interface ServerOptions {
+  pricingRates?: ExchangeRates;
   auth: Authenticator; store: TripStore; fixtures: boolean; catalog?: CheckedCatalog;
   routes?: RouteProvider; places?: GooglePlaces; webOrigin: string; logger?: boolean; rateMax?: number; providerDailyLimit?: number;
   interpreter?: IntentInterpreter; aiDailyLimit?: number; operatorToken?: string; fixtureSessionRateMax?: number;

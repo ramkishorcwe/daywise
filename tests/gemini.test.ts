@@ -25,3 +25,8 @@ it('Gemini timeout, quota and truncated responses do not silently fall back to a
 it('Gemini model validation prevents an untrusted model value from changing the request endpoint', async () => {
   const request = vi.fn<typeof fetch>(); await expect(new GeminiInterpreter('test', '../other', request).rankGuide(context)).rejects.toThrow('valid GEMINI_MODEL'); expect(request).not.toHaveBeenCalled();
 });
+it('distinguishes Gemini provider quota from the app limit without retry storms or fabricated fallback', async () => {
+  const request = vi.fn<typeof fetch>(async () => new Response('', { status: 429 }));
+  await expect(new GeminiInterpreter('test', 'configured-model', request).rankGuide(context)).rejects.toMatchObject({ code: 'QUOTA', message: expect.stringContaining('midnight Pacific time') });
+  expect(request).toHaveBeenCalledTimes(1);
+});

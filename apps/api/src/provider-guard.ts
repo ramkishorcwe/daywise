@@ -5,7 +5,7 @@ import { ApiError } from './errors';
 export class ProviderGuard {
   private records = new Map<string, { digest: string; state: 'pending' | 'finished'; expires: number }>();
   private day = ''; private calls = 0;
-  constructor(private dailyLimit = 100, private clock = () => Date.now()) {}
+  constructor(private dailyLimit = 100, private clock = () => Date.now(), private service: 'provider' | 'ai' = 'provider') {}
   cleanup() { const now = this.clock(); for (const [id, record] of this.records) if (record.expires <= now) this.records.delete(id); }
   private resetDay() {
     const day = new Date(this.clock()).toISOString().slice(0, 10);
@@ -14,7 +14,9 @@ export class ProviderGuard {
   usage() { this.resetDay(); return { utcDay: this.day, attempts: this.calls, limit: this.dailyLimit, remaining: Math.max(0, this.dailyLimit - this.calls), scope: 'one_process' }; }
   consume() {
     this.resetDay();
-    if (this.calls >= this.dailyLimit) throw new ApiError(429, 'PROVIDER_BUDGET_LIMIT', 'The local provider request allowance is exhausted. Try again after the UTC day changes.');
+    if (this.calls >= this.dailyLimit) throw new ApiError(429, this.service === 'ai' ? 'AI_BUDGET_LIMIT' : 'PROVIDER_BUDGET_LIMIT', this.service === 'ai'
+      ? `The app's AI planning allowance is exhausted (${this.calls}/${this.dailyLimit} requests). It resets at 00:00 UTC. Turn off Use configured AI planning to continue with local planning. Your saved trip is preserved.`
+      : `The app's Google Maps request allowance is exhausted (${this.calls}/${this.dailyLimit} requests). It resets at 00:00 UTC; the app operator can raise the local allowance. This is separate from Google's quota. Your saved trip is preserved.`);
     this.calls++;
   }
   async run<T>(owner: string, key: unknown, body: unknown, work: () => Promise<T>): Promise<T> {

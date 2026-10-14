@@ -15,7 +15,7 @@ import { ProviderGuard } from './provider-guard';
 export class AssistantService {
   private proposals = new Map<string, { owner: string; value: Proposal; state: 'pending' | 'resolving' }>();
   private aiBudget: ProviderGuard;
-  constructor(private store: TripStore, private interpreter: IntentInterpreter, private fixtures: boolean, private clock = () => Date.now(), aiDailyLimit = 20) { this.aiBudget = new ProviderGuard(aiDailyLimit, clock); }
+  constructor(private store: TripStore, private interpreter: IntentInterpreter, private fixtures: boolean, private clock = () => Date.now(), aiDailyLimit = 20) { this.aiBudget = new ProviderGuard(aiDailyLimit, clock, 'ai'); }
   usage() { return this.aiBudget.usage(); }
   reserveAI() { if (this.interpreter.mode !== 'local') this.aiBudget.consume(); }
   cleanup() { const now = this.clock(); for (const [id, record] of this.proposals) if (Date.parse(record.value.expiresAt) <= now) this.proposals.delete(id); this.aiBudget.cleanup(); }

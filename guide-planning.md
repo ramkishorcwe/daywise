@@ -30,8 +30,8 @@ The input-shortlist matrix comparison can include places omitted from the final 
 - Visit durations, arrival buffers and meal/rest allowances are editable estimates. Include meal defaults on and adds one nearby midday restaurant only when the selected tour reaches 13:00–14:00. Unchecking excludes all meal allowances. Rest pauses are independent; preparation and prices remain unverified.
 - Drive estimates represent one departure request; later traffic may differ. Walking/cycling estimates are static. No live congestion, event or road-closure observations are fabricated.
 - Admission ranges come from independently reviewed evidence or clearly labeled user estimates. Google price levels are not converted into entrance fees. Unknown admission is never treated as free.
-- Per-person admission is multiplied by all travelers; group charges are added once. Group and per-person subtotals and limits are separate. Where both limits exist, the stricter equivalent group limit applies. Age-specific tickets remain unverified.
-- Optional group meal/transport estimates and group transport cost per kilometre affect selection and update with real route distance. Currencies are not converted. Parking, unknown activities and other essential unknowns stay visible.
+- Per-person admission is multiplied by all travelers; group charges are added once. Group and per-person subtotals and limits are separate. Where both limits exist, the stricter equivalent group limit applies. Published City Palace under-12 tickets are applied; unconfirmed concessions use standard adult admission.
+- Optional group meal/transport estimates and group transport cost per kilometre affect selection and update with real route distance. Published INR costs use dated Frankfurter reference rates for other currencies, with upward rounding and visible original tariffs. Parking, unknown activities and other essential unknowns stay visible.
 - Existing navigation uses actual coordinates, eligible place IDs and the correct drive/walk/bicycle mode. GPS and map pins retain their exact selected coordinates. The return-to-start setting uses the current validated origin; a different return selection is preserved when that setting is off.
 
 ## Files and responsibilities
@@ -78,7 +78,7 @@ This project now uses `ASSISTANT_MODE=gemini`. The key was copied from the local
 ASSISTANT_MODE=gemini
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.1-flash-lite
-AI_DAILY_LIMIT=20
+AI_DAILY_LIMIT=100
 ```
 
 The blank key above is documentation only; the real local `.env` is configured. The original model alias in the supplied file returned a service error. The accessible stable `gemini-3.1-flash-lite` model passed a structured request and was selected instead. The app sends the key in the server `x-goog-api-key` header, never in a URL or VITE field. Actual field support was verified against the account; the request uses `responseMimeType` and `responseJsonSchema`. Retain access to the Generative Language API and its model quota/billing independently of Google Maps billing. After environment changes restart the API; `/api/locations/config` reports `guideAssistant: "gemini"`.
@@ -93,7 +93,7 @@ Primary references: [Gemini structured outputs](https://ai.google.dev/gemini-api
 
 `CHECKED_CATALOG_PATH` can point to the existing private checked catalog. Each actual location needs licensed or independently collected evidence with HTTPS source, method, rights, checked date and future validity date, an actual Google place ID, and city status `route_review`. Optional `admission` includes minimum/maximum, currency and person/group basis. Optional `openingHours` includes the actual date and ISO opening/closing windows. Expired evidence is excluded. Do not manufacture entries or persist transient Google facts into this catalog.
 
-No verified admission catalog or restaurant preparation evidence has been supplied for this validation. The working UI therefore shows unknown admission and dietary information. Detailed heritage interpretation, uniqueness, best lighting/shade, special events and branch-level dietary guarantees are not inferred as verified facts.
+Standard admission evidence is now attached to matching provider-verified Jaipur venues as documented below. No restaurant preparation verification is supplied; dietary information and admission for other venues remain unknown. Detailed heritage interpretation, uniqueness, best lighting/shade, special events and branch-level dietary guarantees are not inferred as verified facts.
 
 ## Validation and current limits
 
@@ -120,3 +120,68 @@ Dinner generation is removed. Old saved dinner preference fields are accepted so
 No additional API key is needed. The existing server Places API (New), Geocoding and Routes keys and spend guards are reused. See [Google Nearby Search documentation](https://developers.google.com/maps/documentation/places/web-service/nearby-search) and [Routes usage and billing](https://developers.google.com/maps/documentation/routes/usage-and-billing). Matrices remain bounded to ten points.
 
 Coverage includes `tests/meals.test.ts`, API cases in `tests/guide.test.ts`, and mobile/saved-day/checkbox cases in `tests/e2e/guide.spec.ts`. Paid live testing is not required for this behavior change; isolated validation uses test providers.
+
+## Trip sharing, local recovery and price ranges
+
+The current live workspace is automatically saved in the browser under `daywise-live-active-v1`. Draft and accepted plans, accepted IDs, party/preferences, selected locations, price allowances and reported costs/progress are preserved separately. Writes are synchronous and schema validated; quota/access failures remain visible and keep the previous stored copy. Malformed/unsupported records are not overwritten. Delete local trip clears the active snapshot and its linked named preferences, then resets the workspace without allowing stale planner callbacks to recreate it. Unrelated browser storage and separately saved days are preserved.
+
+Restoration makes no GPS request and no automatic paid location/route request. Existing checked/expiry timestamps remain unchanged. A saved route remains readable; locations must be explicitly refreshed before route editing or regeneration, and new acceptance still requires review. The existing server and named-preference ID-only persistence are unchanged. Review provider retention before public deployment.
+
+Trip price summary uses the itinerary's whole-group minimum/maximum subtotal plus optional user-entered additional category ranges. These additional allowances are scoped to the exact route/budget and currency, never copied to a different plan. They are excluded from booked/actual ledgers and route feasibility calculations. Unpriced items remain explicit; a displayed range is never a provider quote or a guaranteed complete cost.
+
+Share trip freezes a reviewed text copy with destination-local schedule, stops, public Google place links and an optional price range. Start/return addresses and coordinates require opt-in. Notes, diet, child ages, expenses, backend IDs/tokens and credentials are excluded. Native device sharing is offered when supported, with copy/download/manual-copy fallbacks. Shared files are static and do not receive revisions. No public hosted link is fabricated.
+
+Planning preference validation names the exact field and explains its valid range or dependency. Go to field opens collapsed sections and focuses the marked control. Currency is required only when a monetary amount is supplied; Solo requires exactly one traveler. Validation runs before provider requests and keeps an accepted itinerary intact. Invalid upstream response data is reported separately from user input errors.
+
+## Automatic rounded admission and meal pricing
+
+Prices reach both Gemini and the deterministic subset/route budget checks before a day is selected. Group costs include admission, one scheduled midday meal, and transport allowances; a known upper estimate above the stricter budget limit makes that sequence infeasible. Optional venues can be omitted. If Gemini's first recommended subset is infeasible, the server may consider its other ranked verified candidates once, preserving must-visits and locks and explaining the repair. A successful initial subset is unchanged.
+
+The standard admission evidence lives in `packages/data-adapters/src/admission-prices.ts`. It supplies no places, coordinates, addresses, IDs or search suggestions. A price is attached only to a matching real Google-selected venue with a verified Indian locality of Jaipur/Amer, including Google's municipal identities Jaipur Nagar Nigam Area and Jaipur Heritage (M Corp.) (Part). A live provider check established the latter for Amber Palace. Exact-ID independently reviewed catalog evidence takes precedence. Another city's City Palace or Nahargarh Biological Park must never receive these tariffs. Evidence reviewed 14 October 2026 expires 14 November 2026; after that, refresh the evidence and review window or display unknown admission. Do not extend it automatically.
+
+| Standard adult entry | Indian (INR) | Foreign (INR) | Evidence |
+| --- | ---: | ---: | --- |
+| Nahargarh Fort | 100 | 600 | [Published 2026 guide](https://www.rajasthantourtrip.com/blog/nahargarh-fort-jaipur-complete-guide.html); planning estimate, reconfirm |
+| Amber/Amer Fort | 200 | 1,000 | [Published 2026 guide](https://www.rajasthantourtrip.com/blog/jaipur-monuments-timing-entry-fee.html); conflicting older rates, reconfirm at OBMS |
+| City Palace Jaipur museum | 400 | 1,200 | [Official admission page](https://citypalace.org/visit); museum courtyards/galleries only |
+| Hawa Mahal, Jantar Mantar, Albert Hall | 100 each | 600 each | [Published guide](https://www.rajasthantourtrip.com/blog/jaipur-monuments-timing-entry-fee.html); planning estimates, reconfirm |
+
+City Palace published under-12 prices are INR 200 Indian / 600 foreign. Other child/student discounts are unconfirmed and standard admission is reserved. Separate tours, shows, transfers, parking and museum products are excluded. Seeing Hawa Mahal from the street is not an interior ticket. Fort prices are published estimates, not a claimed live official ticket lookup.
+
+For an Indian destination, selecting the destination suggests INR only when the currency field is empty. An already selected currency is preserved. Admission visitor category defaults to Suggest from currency: INR suggests Indian, another currency suggests foreign. This is a user-visible suggestion, not an inference of nationality. Indian/Foreign overrides are independent of currency. Mixed groups can use a group admission override for a stop. Costs are repriced on each plan request, including existing candidate receipts; draft currency or eligibility changes never rewrite an accepted plan.
+
+Meal allowances are per person, not group prices: budget INR 150–300 (rounded midpoint 230), standard 300–600 (450), premium 600–1,200 (900). These are application planning allowances, not observed averages or actual menus. Automatic tier considers the budget and Google's available price level; explicit tier wins. No restaurant is invented. The allowance attaches to the real nearby restaurant chosen by the existing timing/detour checks. Food is counted only if a meal is scheduled (or reserved during subset selection when the day overlaps the midday window). Unchecking Include meal, a morning trip or an evening trip adds no food charge. A manual group meal estimate overrides the automatic allowance once. Drinks and extras are unpriced.
+
+When no manual fixed/per-km transport estimate exists, Indian driving routes use a transparent group planning allowance: minimum INR 300 + 15 per routed km, maximum INR 500 + 25 per routed km, rounded upward. This is not a taxi quote. Supplied fixed and per-km estimates retain their existing additive behavior. Walking/cycling routes add no automatic motor-transport allowance; rentals, parking and incidentals remain unpriced.
+
+`packages/data-adapters/src/exchange-rates.ts` uses [Frankfurter v2 reference rates](https://frankfurter.dev/) on the server, without a key or additional library. Only currency codes are sent. Successful rates cache for 30 minutes and concurrent requests coalesce. Wrong pairs, rates older than seven days, invalid responses and timeouts fail explicitly; there is no 1:1 fallback. Unsupported currencies require retry or INR with an explicit visitor category. INR amounts round upward to tens, other converted amounts to whole currency units; group/per-person averages can have decimals. Original INR tariffs, reference date and planning provenance are visible.
+
+Each stop, map marker title, group breakdown, accepted itinerary, budget view and shared text uses the same plan prices. The range separates included tickets/food/transport from optional additional allowances. Food shows a per-person range, rounded midpoint and group allowance. Price-enabled sharing includes these figures; unchecking Include price summary removes all monetary details. Local snapshots retain the exact accepted prices and source dates without silently refreshing them.
+
+Verification: pricing/domain/FX tests in `tests/travel-pricing.test.ts`, authenticated provider/AI budget cases in `tests/guide.test.ts`, and mobile currency/meal/share/refresh journeys in `tests/e2e/travel-pricing.spec.ts`. All provider fixtures remain confined to tests. No new paid API, client secret or environment key is required.
+
+## Local development request allowances
+
+The presentation setup uses `PROVIDER_DAILY_LIMIT=600` and `AI_DAILY_LIMIT=100` in `.env`. Restart the API after editing these values; the running process does not hot-reload environment files. Both local counters reset at 00:00 UTC and on process restart. The 101st AI attempt or 601st Google request is rejected before calling the provider; failed attempts also consume the allowance. Defaults without these environment values stay conservative (100 Google / 20 AI). Existing per-minute limits, duplicate-request protection, provider/model choice and billing remain unchanged. The local count is per server process and counts attempted requests, not billable matrix elements, tokens or a monetary ceiling.
+
+Local AI exhaustion returns `AI_BUDGET_LIMIT`; Google app exhaustion returns `PROVIDER_BUDGET_LIMIT`. Gemini upstream 429 returns `PROVIDER_QUOTA` and names the configured model. These are different limits. [Google's Gemini quotas](https://ai.google.dev/gemini-api/docs/rate-limits) are applied per project/model across RPM, TPM and RPD; daily provider quota resets at midnight Pacific time. Raising the app allowance does not raise Google's quota. Select the exact configured `GEMINI_MODEL` in AI Studio when checking limits; another model's chart does not describe this application's allowance. Users can explicitly turn AI planning off to use the existing deterministic planner; no silent model/fallback or automatic repeated provider requests are introduced.
+
+## Browser request deadlines and backend errors
+
+A shared 20-second client timeout previously canceled the multi-stage Gemini/Google plan and mislabeled it as an unavailable backend. The browser now bounds `/guide/plan` at 80 seconds, `/guide/discover` and `/plans/live` at 60 seconds, and ordinary lookup/configuration calls at 20 seconds. The planner's existing overall 90-second deadline and caller cancellation/stale-response checks remain in force. A client timeout returns REQUEST_TIMEOUT with the operation/deadline; actual network failures retain the backend-unavailable message and HTTP provider quota/errors remain distinct. There are no automatic timeout retries. Existing accepted routes and local snapshots are preserved. Fastify's requestTimeout bounds receipt of a request body, not itinerary processing; it is unchanged.
+
+Regression coverage: `tests/http-timeout.test.ts` and `tests/e2e/planning-timeout.spec.ts`, including a response arriving after 23 seconds, explicit cancellation, provider/network errors, one request per attempt and preservation of accepted trips.
+
+## WhatsApp itinerary and whole-journey maps
+
+Share trip now has Share on WhatsApp, Open shared route in Google Maps, and Preview shared map. WhatsApp uses the official click-to-chat `https://wa.me/?text=...` draft flow: the user reviews the WhatsApp message preview, chooses the recipient and presses Send in WhatsApp. No account connection, phone number, automatic send, API key or new dependency is required. The draft includes destination-local stop times, meal labels, optional group estimate and usable public Google Maps links. Its compact text is separate from the existing full copy/download/native-share preview.
+
+Start/return coordinates stay opt-in through the existing Include starting and return locations checkbox. With it unchecked, every generated route URL and the shared map preview includes only the selected public visits. Full private route geometry is not rendered in the shared preview until opted in. Guide notes, ages, diet, reported expenses, tokens and credentials are excluded. The preview freezes the chosen plan and additional allowances so subsequent async drafts cannot alter what is shared.
+
+Follow my day now presents Your whole journey above the detailed itinerary, using the existing saved Google polyline with numbered start, visits/meal and return markers. Selecting a journey stop keeps the itinerary highlight synchronized. The return is the actual accepted endpoint, including a different return place. Restore does not refresh provider facts or request another GPS fix. The existing planner pin-selection map remains unchanged.
+
+Route links use validated exact coordinates, preserve itinerary order and travel mode, and use searched place IDs where appropriate. GPS/pin endpoints do not snap to reverse-geocoded building IDs. [Google Maps URL documentation](https://developers.google.com/maps/documentation/urls/get-started) permits at most three intermediate waypoints in mobile browsers and nine elsewhere, with a 2,048-character URL limit. Longer routes include the full overview plus numbered mobile sections with at most three intermediate waypoints, sharing boundaries so every leg is covered. Optional overlong place IDs are omitted as a group, preserving coordinates; they are never truncated. A single public visit uses a location-search link rather than an unspecified origin.
+
+Google Maps computes current directions when a route link opens; it does not preserve the original driving predictions or visit schedule. WhatsApp retains the saved schedule text. These are public Google Maps links, not a hosted Daywise itinerary page or a localhost link. There is no additional Places/Gemini/Routes request simply to generate links; opening interactive maps uses the existing Maps JavaScript configuration.
+
+Tests cover WhatsApp encoding/privacy, independent/same-place returns, exact GPS coordinates, modes, long place IDs, mobile route sections, phone layout, map highlighting, sharing toggles and local refresh recovery in `tests/trip-local-share-price.test.ts` and `tests/e2e/journey-sharing.spec.ts`.
