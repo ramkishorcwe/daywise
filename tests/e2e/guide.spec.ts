@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { setup } from './helpers/live-guide';
+import { savedAcceptedTrips } from './helpers/accepted-trips';
 
 test('guide discovers real candidates, reviews unknown costs, keeps numbering synchronized and requires review before acceptance', async ({ page }) => {
   await setup(page); await expect(page.getByRole('combobox', { name: 'Visit 1', exact: true })).toHaveCount(0); await expect(page.getByRole('button', { name: 'Add another visit', exact: true })).toHaveCount(0); await expect(page.getByRole('combobox', { name: 'Guide attraction', exact: true })).toHaveCount(0); await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
@@ -86,22 +87,18 @@ test('optional meals, Any food, map highlights, saved preferences and manual edi
   await review.getByRole('button', { name: 'Highlight Provider Lunch on map', exact: true }).click();
   await expect(review.locator('.guide-highlight')).toContainText('Provider Lunch');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByLabel('Private day name', { exact: true }).fill('My day with meals');
   await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: 'Completed visits', exact: true }).selectOption('3');
   await page.getByRole('button', { name: /My day plan/ }).click();
-  await page.getByLabel('Private day name', { exact: true }).fill('My day with meals');
-  await page.getByRole('button', { name: 'Save day preferences', exact: true }).click();
-  await expect(page.getByText(/Private day preferences saved/)).toBeVisible();
-  const saved = await page.evaluate(() => new Promise<any[]>((resolve, reject) => {
-    const opening = indexedDB.open('daywise-live', 1); opening.onerror = () => reject(opening.error);
-    opening.onsuccess = () => { const db = opening.result, read = db.transaction('days').objectStore('days').getAll(); read.onsuccess = () => { db.close(); resolve(read.result); }; };
-  }));
-  expect(saved[0].guide.preferences.meals.lunch.durationMinutes).toBe(50);
-  expect(saved[0].guide.preferences.mealBreak).toBe(true); expect(saved[0].guide.preferences.meals).not.toHaveProperty('dinner');
-  expect(saved[0].guide.stops).toHaveLength(2); expect(saved[0].stops).toHaveLength(3);
-  expect(JSON.stringify(saved)).not.toContain('provider address');
+  await expect.poll(async () => (await savedAcceptedTrips(page)).length).toBe(1);
+  const saved = await savedAcceptedTrips(page);
+  expect(saved[0].guideSaved.preferences.meals.lunch.durationMinutes).toBe(50);
+  expect(saved[0].guideSaved.preferences.mealBreak).toBe(true); expect(saved[0].guideSaved.preferences.meals).not.toHaveProperty('dinner');
+  expect(saved[0].guideSaved.stops).toHaveLength(2); expect(saved[0].stops).toHaveLength(3);
+  expect(JSON.stringify(saved)).not.toContain('"receipt":');
   await page.getByText('Adjust the planned visits', { exact: true }).click();
   await expect(page.getByLabel('Visit duration for Provider Lunch', { exact: true })).toHaveCount(0);
   await page.getByLabel('Visit duration for Provider Garden', { exact: true }).fill('40');
@@ -145,13 +142,11 @@ test('unchecking Include meal removes the restaurant and saves the exclusion pre
   expect(state.inputs[1].preferences.mealBreak).toBe(false);
   expect(state.inputs[1].preferences.meals.lunch.enabled).toBe(false);
   await page.getByLabel('Private day name', { exact: true }).fill('Day without a meal');
-  await page.getByRole('button', { name: 'Save day preferences', exact: true }).click();
-  await expect(page.getByText(/Private day preferences saved/)).toBeVisible();
-  const saved = await page.evaluate(() => new Promise<any[]>((resolve, reject) => {
-    const opening = indexedDB.open('daywise-live', 1); opening.onerror = () => reject(opening.error);
-    opening.onsuccess = () => { const db = opening.result, read = db.transaction('days').objectStore('days').getAll(); read.onsuccess = () => { db.close(); resolve(read.result); }; };
-  }));
-  expect(saved[0].guide.preferences.mealBreak).toBe(false);
-  expect(saved[0].guide.preferences.meals).not.toHaveProperty('dinner');
+  await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();
+  await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
+  await expect.poll(async () => (await savedAcceptedTrips(page)).length).toBe(1);
+  const saved = await savedAcceptedTrips(page);
+  expect(saved[0].guideSaved.preferences.mealBreak).toBe(false);
+  expect(saved[0].guideSaved.preferences.meals).not.toHaveProperty('dinner');
   expect(saved[0].stops).toHaveLength(2);
 });

@@ -8,6 +8,7 @@ import { tripShareText } from '../apps/web/src/trip-share';
 import { journeyLinks, whatsappItineraryText, whatsappUrl } from '../apps/web/src/journey-links';
 import { sharedSnapshot } from '../apps/web/src/shared-trip';
 import { sharedTripSchema } from '../packages/contracts/src/shared-trip';
+import { acceptedTripCopy } from '../apps/web/src/accepted-trips';
 
 it('shared page snapshots exclude private endpoints, geometry, session credentials and preferences by default', () => {
   const p = plan(); p.itinerary.start.receipt = 'A'.repeat(50);
@@ -76,6 +77,14 @@ it('restores draft and accepted snapshots independently with their original iden
   writeLocalTrip(store, value); const restored = readLocalTrip(store);
   expect(restored.error).toBe(''); expect(restored.trip).toEqual(value);
   expect(restored.trip?.accepted?.route.departureTime).toBe(now);
+});
+it('builds an accepted-only saved copy and excludes unrelated draft locations, schedules and prices', () => {
+  const value = trip(), accepted = value.accepted!;
+  value.title = 'Accepted name'; value.start = { ...accepted.start, name: 'Unaccepted location' }; value.preview = { ...accepted, start: value.start }; value.guideReview = null; value.startTime = '01:00'; value.endTime = '02:00'; value.date = '2000-01-01';
+  const copy = acceptedTripCopy(value)!;
+  expect(copy.start).toEqual(accepted.start); expect(copy.preview).toEqual(accepted); expect(copy.guideReview).toEqual(value.acceptedGuide); expect(copy.view).toBe('day');
+  expect(copy.date).toBe(accepted.route.departureTime.slice(0, 10)); expect(copy.acceptedId).toBe(value.acceptedId); expect(copy.priceAllowances).toEqual(value.acceptedPriceAllowances);
+  expect(acceptedTripCopy({ ...value, accepted: null, acceptedGuide: null, acceptedId: null })).toBeNull();
 });
 it('preserves unreadable and unsupported local records instead of deleting or guessing data', () => {
   for (const raw of ['{bad', JSON.stringify({ ...trip(), version: 2 }), JSON.stringify({ ...trip(), acceptedId: null })]) {
