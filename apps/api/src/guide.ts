@@ -15,6 +15,7 @@ import { pricedCandidate } from '../../../packages/domain/src/travel-pricing';
 import { FrankfurterRates } from '../../../packages/data-adapters/src/exchange-rates';
 import { mealSearchAnchors, chooseMealInsertion, validateMealDetours } from '../../../packages/domain/src/meal-planner';
 import { z } from 'zod';
+import { placePhotoRequestSchema, placePhotoSchema } from '../../../packages/contracts/src/place-photo';
 
 export function registerGuideRoutes(app: FastifyInstance, context: { options: ServerOptions; locations: LocationRegistry; guard: ProviderGuard; owner: (request: FastifyRequest) => string; interpreter: IntentInterpreter; assistant: AssistantService; catalog: CheckedCatalog }) {
   const { options, locations, guard, owner, interpreter, assistant, catalog } = context;
@@ -81,6 +82,14 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     }
     return { order, candidates, matrix };
   }
+  app.post('/api/guide/photo', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const { placeId } = placePhotoRequestSchema.parse(request.body);
+    reply.header('Cache-Control', 'private, no-store');
+    const source = provider();
+    if (!source.photo) return { photo: null };
+    await guard.consume();
+    return placePhotoSchema.parse(await source.photo(placeId, async () => { await guard.consume(); }));
+  });
   app.post('/api/guide/discover', { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } }, async request => {
     const body = guideDiscoverSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), source = provider();
     const localToday = new Intl.DateTimeFormat('en-CA', { timeZone: destination.timezone!, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());

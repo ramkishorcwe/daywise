@@ -80,7 +80,7 @@ test('optional meals, Any food, map highlights, saved preferences and manual edi
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
   const review = page.getByRole('region', { name: 'Guided itinerary review', exact: true });
   await expect(review).toContainText('50 min meal'); await expect(review).not.toContainText('Dinner');
-  await expect(review.locator('.meal-route-note')).toHaveCount(1);
+  await expect(review.locator('.guide-stop-title').filter({ hasText: 'Meal · Provider Lunch' })).toHaveCount(1);
   expect(state.inputs[0].preferences.dietaryRules).toEqual([]);
   expect(state.inputs[0].stops).toHaveLength(2); // Restaurants never become attraction-edit constraints.
   await review.getByRole('button', { name: 'Highlight Provider Lunch on map', exact: true }).click();
@@ -136,11 +136,11 @@ test('unchecking Include meal removes the restaurant and saves the exclusion pre
   await expect(page.getByRole('checkbox', { name: 'Include meal time', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
   const review = page.getByRole('region', { name: 'Guided itinerary review', exact: true });
-  await expect(review.locator('.meal-route-note')).toHaveCount(1);
+  await expect(review.locator('.guide-stop-title').filter({ hasText: 'Meal · Provider Lunch' })).toHaveCount(1);
   await page.getByRole('checkbox', { name: 'Include meal', exact: true }).uncheck();
   await page.getByRole('button', { name: 'Recalculate my day', exact: true }).click();
   await expect.poll(() => state.inputs.length).toBe(2);
-  await expect(review.locator('.meal-route-note')).toHaveCount(0);
+  await expect(review.locator('.guide-stop-title').filter({ hasText: 'Meal · Provider Lunch' })).toHaveCount(0);
   await expect(review).not.toContainText('Provider Lunch');
   expect(state.inputs[1].preferences.mealBreak).toBe(false);
   expect(state.inputs[1].preferences.meals.lunch.enabled).toBe(false);

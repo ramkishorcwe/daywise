@@ -25,6 +25,7 @@ export async function setup(page: Page, withMeals = false, withPrices = false) {
   await page.route('**/api/locations/autocomplete', r => r.fulfill({ json: { provider: 'google', suggestions: [{ placeId: 'provider-search-id', text: 'Provider selected place' }] } }));
   await page.route('**/api/locations/resolve', async r => { const body = r.request().postDataJSON(); const l = createLocation(body.destinationCity ? withPrices ? 'Jaipur' : 'Provider city' : 'Provider start', body.destinationCity); places.set(l.id, l); await r.fulfill({ json: l }); });
   await page.route('**/api/guide/discover', async r => { const p = guidePreferencesSchema.parse(r.request().postDataJSON().preferences); await r.fulfill({ json: { candidates: withPrices ? await Promise.all(bank.map(c => pricedCandidate(c, p, rates))) : bank, warnings: ['Admission costs are unverified.'], assistantMode: 'local' } }); });
+  await page.route('**/api/guide/photo', r => r.fulfill({ json: { photo: null } }));
   await page.route('**/api/guide/plan', async r => {
     const body = r.request().postDataJSON() as GuidePlanRequest; inputs.push(body);
     let rows: GuideStop[] = body.orderMode === 'smart' && !body.stops.some(s => s.locked) ? [...body.stops].reverse() : body.stops;

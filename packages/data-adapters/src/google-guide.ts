@@ -4,16 +4,32 @@ import { providerPlaceId } from '../../contracts/src/locations';
 import type { GuideFacts, GuidePreferences } from '../../contracts/src/guide';
 import { zonedTime } from '../../domain/src/time';
 import { ProviderError } from './google';
+import { placePhotoSchema, type PlacePhoto } from '../../contracts/src/place-photo';
 
 const daySchema = z.object({ year: z.number().int(), month: z.number().int(), day: z.number().int() });
 const point = z.object({ day: z.number().int().min(0).max(6).default(0), hour: z.number().int().min(0).max(23).default(0), minute: z.number().int().min(0).max(59).default(0), date: daySchema.optional(), truncated: z.boolean().optional() });
 const hoursSchema = z.object({ periods: z.array(z.object({ open: point, close: point.optional() })).max(30).optional(), weekdayDescriptions: z.array(z.string()).optional() });
 export const guidePlaceSchema = z.object({ id: providerPlaceId, displayName: z.object({ text: z.string().min(1).max(300) }), formattedAddress: z.string().min(1).max(1000), location: coordinateSchema, types: z.array(z.string()), businessStatus: z.string().optional(), priceLevel: z.string().optional(), rating: z.number().optional(), userRatingCount: z.number().int().optional(), currentOpeningHours: hoursSchema.optional(), regularOpeningHours: hoursSchema.optional(), accessibilityOptions: z.object({ wheelchairAccessibleEntrance: z.boolean().optional() }).optional(), goodForChildren: z.boolean().optional(), servesVegetarianFood: z.boolean().optional(), servesLunch: z.boolean().optional(), websiteUri: z.url().optional(), googleMapsUri: z.url().optional(), editorialSummary: z.object({ text: z.string().max(2500) }).optional(), containingPlaces: z.array(z.object({ id: providerPlaceId })).max(10).optional(), attributions: z.array(z.object({ provider: z.string(), providerUri: z.url().optional() })).optional() });
 export type GuidePlace = z.infer<typeof guidePlaceSchema>;
-export interface GuidePlacesProvider { discover(city: string, center: Coordinate, preferences: GuidePreferences): Promise<GuidePlace[]>; facts(placeId: string): Promise<GuidePlace>; nearbyRestaurants?(center: Coordinate, radiusMeters: number): Promise<GuidePlace[]> }
+export interface GuidePlacesProvider { discover(city: string, center: Coordinate, preferences: GuidePreferences): Promise<GuidePlace[]>; facts(placeId: string): Promise<GuidePlace>; nearbyRestaurants?(center: Coordinate, radiusMeters: number): Promise<GuidePlace[]>; photo?(placeId: string, beforeMedia: () => Promise<void>): Promise<PlacePhoto> }
 const fields = ['id', 'displayName', 'formattedAddress', 'location', 'types', 'businessStatus', 'priceLevel', 'rating', 'userRatingCount', 'currentOpeningHours', 'regularOpeningHours', 'accessibilityOptions', 'goodForChildren', 'servesVegetarianFood', 'servesLunch', 'websiteUri', 'googleMapsUri', 'editorialSummary', 'containingPlaces', 'attributions'];
 export class GoogleGuidePlaces implements GuidePlacesProvider {
   constructor(private key: string, private request: typeof fetch = fetch) {}
+  async photo(placeId: string, beforeMedia: () => Promise<void>): Promise<PlacePhoto> {
+    const id = providerPlaceId.parse(placeId);
+    const raw = await this.json(`https://places.googleapis.com/v1/places/${encodeURIComponent(id)}`, { headers: { 'X-Goog-Api-Key': this.key, 'X-Goog-FieldMask': 'photos' } });
+    const metadata = z.object({ photos: z.array(z.object({ name: z.string().max(10000), authorAttributions: z.array(z.object({ displayName: z.string().min(1).max(300), uri: z.url().optional() })).max(20).optional() })).max(10).optional() }).safeParse(raw);
+    if (!metadata.success) throw new ProviderError('INVALID_RESPONSE', 'Google returned invalid place photo information.');
+    const photo = metadata.data.photos?.[0];
+    if (!photo) return { photo: null };
+    if (!photo.name.startsWith(`places/${id}/photos/`) || !/^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/.test(photo.name)) throw new ProviderError('INVALID_RESPONSE', 'Google returned an invalid photo reference.');
+    await beforeMedia();
+    const media = await this.json(`https://places.googleapis.com/v1/${photo.name}/media?maxWidthPx=720&maxHeightPx=480&skipHttpRedirect=true`, { headers: { 'X-Goog-Api-Key': this.key } });
+    const uri = z.object({ photoUri: z.string() }).safeParse(media);
+    const result = placePhotoSchema.safeParse({ photo: { uri: uri.success ? uri.data.photoUri : '', authors: (photo.authorAttributions ?? []).map(author => ({ name: author.displayName, uri: author.uri ?? null })) } });
+    if (!result.success) throw new ProviderError('INVALID_RESPONSE', 'Google returned an invalid photo image.');
+    return result.data;
+  }
   private async json(url: string, init: RequestInit) {
     let response: Response; try { response = await this.request(url, { ...init, signal: AbortSignal.timeout(10000) }); } catch { throw new ProviderError('UNAVAILABLE', 'Place discovery timed out. Retry; no sample attractions were substituted.'); }
     if (!response.ok) throw new ProviderError(response.status === 429 ? 'QUOTA' : 'UNAVAILABLE', 'Google rejected guide discovery. Check Places API (New), billing and the server key restrictions.');
