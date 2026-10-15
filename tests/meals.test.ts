@@ -14,7 +14,7 @@ function setup() {
   const candidates = [place('museum'), place('gallery'), place('nearby-food', true), place('distant-food', true)];
   const choice = (c: GuideCandidate): GuideStop => ({ locationId: c.location.id, durationMinutes: 30, mustVisit: false, locked: false, preferredTime: null, costEstimate: null });
   const order = candidates.slice(0, 2).map(choice);
-  const preferences = guidePreferencesSchema.parse({ adults: 2, childAges: [], groupBudget: null, currency: 'USD', dietaryRules: [], bufferMinutes: 0, mealBreak: true, restBreaks: false, meals: { ...structuredClone(defaultMealPreferences), lunch: { enabled: true, startTime: '13:00', endTime: '14:00', durationMinutes: 45 } } });
+  const preferences = guidePreferencesSchema.parse({ interests: ['museums'], adults: 2, childAges: [], groupBudget: null, currency: 'USD', dietaryRules: [], bufferMinutes: 0, mealBreak: true, restBreaks: false, meals: { ...structuredClone(defaultMealPreferences), lunch: { enabled: true, startTime: '13:00', endTime: '14:00', durationMinutes: 45 } } });
   const input: GuidePlanRequest = { destinationId: randomUUID(), startId: randomUUID(), endId: null, returnToStart: true, allowOutsideStart: false, date, startTime: '12:00', endTime: '21:00', preferences, orderMode: 'manual', stops: order };
   const matrix: TravelMatrix = Array.from({ length: candidates.length + 2 }, (_, i) => Array.from({ length: candidates.length + 2 }, (_, j) => ({ durationSeconds: i === j ? 0 : 120, distanceMeters: i === j ? 0 : 400 })));
   return { candidates, order, input, matrix, destination: candidates[0].location as SelectedLocation };

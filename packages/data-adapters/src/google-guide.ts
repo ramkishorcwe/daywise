@@ -37,8 +37,8 @@ export class GoogleGuidePlaces implements GuidePlacesProvider {
   }
   async discover(city: string, center: Coordinate, p: GuidePreferences) {
     if (!this.key) throw new ProviderError('NOT_CONFIGURED', 'Configure the Places API (New) server key for discovery.');
-    const interests = p.interests.filter(i => i !== 'hidden_gems').slice(0, 3).join(' ').replaceAll('_', ' ');
-    const raw = await this.json('https://places.googleapis.com/v1/places:searchText', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': this.key, 'X-Goog-FieldMask': fields.map(f => `places.${f}`).join(',') }, body: JSON.stringify({ textQuery: `famous landmarks and tourist attractions in ${city}, including ${interests || 'culture and nature'}`, pageSize: 12, languageCode: 'en', locationBias: { circle: { center, radius: 40000 } } }) });
+    const interests = p.interests.filter(i => i !== 'hidden_gems').join(', ').replaceAll('_', ' ');
+    const raw = await this.json('https://places.googleapis.com/v1/places:searchText', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': this.key, 'X-Goog-FieldMask': fields.map(f => `places.${f}`).join(',') }, body: JSON.stringify({ textQuery: interests ? `${interests} places to visit in ${city}` : `places to visit in ${city}`, pageSize: 12, languageCode: 'en', locationBias: { circle: { center, radius: 40000 } } }) });
     const result = z.object({ places: z.array(z.unknown()).max(20).optional() }).safeParse(raw);
     if (!result.success) throw new ProviderError('INVALID_RESPONSE', 'Google discovery returned invalid results.');
     const seen = new Set<string>();
