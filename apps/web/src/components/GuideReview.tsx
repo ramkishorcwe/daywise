@@ -1,14 +1,16 @@
 import { StopPrice } from './StopPrice';
 import { PlacePhoto } from './PlacePhoto';
+import TrafficAdvisory from './TrafficAdvisory';
 import '../guide.css';
 import type { GuidePlan } from '../../../../packages/contracts/src/guide';
-import { formatTime } from '../../../../packages/domain/src/time-format';
+import { formatTime, localDate } from '../../../../packages/domain/src/time-format';
 import { mapsNavigation } from '../maps-navigation';
 const money = (minimum: number, maximum: number, currency: string | null) => currency ? `${new Intl.NumberFormat('en', { maximumFractionDigits: 2 }).format(minimum)}–${new Intl.NumberFormat('en', { maximumFractionDigits: 2 }).format(maximum)} ${currency}` : 'Currency not selected';
 export function GuideReview({ plan, activeIndex, onHighlight }: { plan: GuidePlan; activeIndex?: number; onHighlight?: (index: number) => void }) {
   const t = plan.itinerary, time = (date: string) => formatTime(Date.parse(date), t.destination.timezone!);
   return <section className="guide-review" aria-label="Guided itinerary review"><span className="eyebrow">{plan.orderMode === 'manual' ? 'YOUR MANUALLY EDITED DAY' : 'GUIDE SUGGESTION · REVIEW BEFORE ACCEPTING'}</span><h2>Review your day in {t.destination.name}</h2>
     <p>{new Intl.DateTimeFormat('en', { timeZone: t.destination.timezone, dateStyle: 'long' }).format(new Date(t.route.departureTime))} · {t.destination.timezone} · {t.route.mode.toLowerCase()}</p>
+    <TrafficAdvisory destination={t.destination} date={localDate(Date.parse(t.route.departureTime), t.destination.timezone!)} />
     <p>Start: {t.start.address ?? t.start.name}<br />Return: {t.end.address ?? t.end.name} · {time(t.finishAt)} (deadline {time(t.deadlineAt)})</p>
     <div className="guide-summary"><span><b>{plan.stops.filter(s => !s.mealKind).length}</b> visits</span>{plan.stops.some(s => s.mealKind) && <span><b>{plan.stops.filter(s => s.mealKind).length}</b> meals</span>}<span><b>{(t.route.distanceMeters / 1000).toFixed(1)} km</b> travel</span><span><b>{Math.ceil(t.route.durationSeconds / 60)} min</b> travel</span><span><b>{t.stops.reduce((n, s, i) => n + (plan.stops[i].mealKind ? 0 : s.durationMinutes), 0)} min</b> sightseeing</span>{plan.stops.some(s => s.mealKind) && <span><b>{t.stops.reduce((n, s, i) => n + (plan.stops[i].mealKind ? s.durationMinutes : 0), 0)} min</b> eating</span>}</div>
     <ol className="guide-timeline">{t.stops.map((stop, index) => { const detail = plan.stops[index]; return <li key={stop.location.id} className={activeIndex === index + 1 ? 'guide-highlight' : ''}>
