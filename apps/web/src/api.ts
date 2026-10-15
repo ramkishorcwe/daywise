@@ -15,7 +15,7 @@ export async function request<T>(path: string, init: RequestInit = {}, authentic
   if (authenticated && refreshToken) token = await refreshToken();
   const headers = new Headers(init.headers); if (init.body) headers.set('Content-Type', 'application/json');
   if (authenticated) { if (!token) throw new HttpError(401, 'UNAUTHENTICATED', 'Connect to the backend first.'); headers.set('Authorization', `Bearer ${token}`); }
-  const milliseconds = path === '/guide/plan' ? 80000 : path === '/guide/discover' || path === '/plans/live' ? 60000 : 20000;
+  const milliseconds = path === '/guide/plan' ? 80000 : path === '/guide/discover' || path === '/plans/live' ? 60000 : path === '/festivals/search' ? 35000 : 20000;
   const timeout = AbortSignal.timeout(milliseconds);
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   const timedOut = () => new HttpError(408, 'REQUEST_TIMEOUT', `${path === '/guide/plan' ? 'Itinerary planning' : path === '/guide/discover' ? 'Attraction discovery' : 'The request'} took longer than ${milliseconds / 1000} seconds. Retry when ready; no automatic retry was sent. Your accepted trip is preserved.`);

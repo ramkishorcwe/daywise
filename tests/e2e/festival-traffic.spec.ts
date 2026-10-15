@@ -37,7 +37,7 @@ test('no Indian event is inferred for a destination in another country', async (
   await expect(notice).not.toContainText('Dussehra');
   await expect(notice).not.toContainText('Possible festival traffic');
   await notice.getByText('Festival coverage', { exact: true }).click();
-  await expect(notice).toContainText('Selected published dates only');
+  await expect(notice).toContainText('Reviewed calendar coverage is limited');
 });
 
 test('festival warning survives acceptance and reload, without following unrelated draft edits', async ({ page }) => {

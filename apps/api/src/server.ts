@@ -34,8 +34,11 @@ import type { EvidenceReceipts } from './receipts';
 import type { HostedBudget } from './hosted-budget';
 import type { SharedTripStore } from './shared-trips';
 import { sharedTripSchema, sharedIdSchema } from '../../../packages/contracts/src/shared-trip';
+import { registerFestivalRoutes } from './festivals';
+import type { FestivalSearchProvider } from '../../../packages/data-adapters/src/festival-search';
 
 export interface ServerOptions {
+  festivalSearch?: FestivalSearchProvider;
   shares?: SharedTripStore;
   receipts?: EvidenceReceipts;
   hostedBudget?: HostedBudget;
@@ -122,7 +125,8 @@ export async function createServer(options: ServerOptions) {
   }
   const mutate = <T>(request: FastifyRequest, body: unknown, work: () => Promise<T>) => guard.run(`${owner(request)}:${request.method}:${request.url.split('?')[0]}`, request.headers['idempotency-key'], body, work);
   app.get('/api/health', async () => ({ schemaVersion: 1, authMode: options.auth.mode, persistence: options.auth.mode === 'local' ? 'local_file' : 'firestore', fixturePlanning: options.fixtures, routingConfigured: !!options.routes, placesConfigured: !!options.places, checkedCities: catalog.available().length, livePlanning: false, assistantMode: interpreter.mode }));
-  app.get('/api/locations/config', async () => ({ ...(options.locationCapabilities ?? { autocomplete: !!options.locations, reverseGeocode: !!options.locations, timezone: !!options.locations, routing: !!options.liveRoutes }), guideDiscovery: !!options.guide, guideRouting: !!options.liveRoutes?.matrix, guideAssistant: interpreter.mode, ...(options.locationConfigurationIssues?.length ? { issues: options.locationConfigurationIssues } : {}) }));
+  app.get('/api/locations/config', async () => ({ ...(options.locationCapabilities ?? { autocomplete: !!options.locations, reverseGeocode: !!options.locations, timezone: !!options.locations, routing: !!options.liveRoutes }), guideDiscovery: !!options.guide, guideRouting: !!options.liveRoutes?.matrix, guideAssistant: interpreter.mode, festivalSearch: !!options.festivalSearch, ...(options.locationConfigurationIssues?.length ? { issues: options.locationConfigurationIssues } : {}) }));
+  registerFestivalRoutes(app, options.festivalSearch, () => assistant.reserveAI(Math.min(10, Math.floor((options.aiDailyLimit ?? 20) / 5))), owner);
   const guideEvidence = registerGuideRoutes(app, { options, locations, guard: providerGuard, owner, interpreter, assistant, catalog });
   if (options.receipts) app.addHook('preHandler', async request => {
     if (!request.body || typeof request.body !== 'object' || !('_evidence' in request.body)) return;

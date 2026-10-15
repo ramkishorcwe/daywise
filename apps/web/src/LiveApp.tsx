@@ -20,7 +20,7 @@ import TripPriceSummary from './components/TripPriceSummary';
 import Dialog from './components/Dialog';
 import JourneyMap from './components/JourneyMap';
 import LiveProgress from './components/LiveProgress';
-import TrafficAdvisory from './components/TrafficAdvisory';
+import TrafficAdvisory, { FestivalSearchContext } from './components/TrafficAdvisory';
 const ShareTrip = lazy(() => import('./components/ShareTrip'));
 const GuidePanel = lazy(() => import('./components/AutoGuidePanel'));
 const GuideReview = lazy(() => import('./components/GuideReview').then(module => ({ default: module.GuideReview })));
@@ -187,7 +187,7 @@ function LiveWorkspace({ reset }: { reset: () => void }) {
     if (guideReview && pricePlanKey(guideReview) === key) setPriceAllowances(value);
   }
   const time = (iso: string, trip: LiveItinerary) => formatTime(Date.parse(iso), trip.destination.timezone!);
-  return <div className="app-shell live-shell">
+  return <FestivalSearchContext.Provider value={config?.festivalSearch ?? false}><div className="app-shell live-shell">
     <a href="#main-content" className="skip-link">Skip to planner</a>
     <aside className="sidebar"><a className="brand" href="#" onClick={event => { event.preventDefault(); setView('plan'); }}><span className="brand-mark"><Compass size={25} /></span>daywise<span className="brand-dot">.</span></a><div className="sidebar-caption">YOUR CITY.<br />YOUR STARTING POINT.</div><nav aria-label="Main navigation"><button className={`nav ${view === 'plan' ? 'active' : ''}`} onClick={() => setView('plan')}><Route size={19} />My day plan</button><button className={`nav ${view === 'saved' ? 'active' : ''}`} onClick={() => void library()}><Bookmark size={19} />Saved plans</button><button className={`nav ${view === 'day' ? 'active' : ''}`} onClick={() => setView('day')}><MapPin size={19} />Follow my day</button></nav><div className="sidebar-bottom"><div className="local-profile"><span className="avatar">Y</span><div><b>Your travel space</b><small>Private · this device</small></div></div></div></aside>
     <div className="workspace"><header className="topbar"><div className="breadcrumb">Your travel space <span>/</span><b>{view === 'saved' ? 'Saved plans' : view === 'day' ? 'Accepted route' : 'Day planner'}</b></div><span className="connection">Google location services</span></header><main id="main-content">
@@ -221,5 +221,5 @@ function LiveWorkspace({ reset }: { reset: () => void }) {
       {deleting && <Dialog title="Delete local trip?" close={() => { if (!deleteBusy) setDeleting(false); }}><p>This removes the selected saved itinerary and its progress and price details from this device. Downloaded or shared copies are independent.</p><div className="button-row"><button className="button secondary" disabled={deleteBusy} onClick={() => setDeleting(false)}>Keep trip</button><button className="button primary" disabled={deleteBusy} onClick={() => void deleteCurrentTrip()}>{deleteBusy ? 'Deleting…' : 'Delete trip from this device'}</button></div></Dialog>}
       <footer className="page-footer"><span>Made for wherever your next day takes you. <a href="/privacy.html" target="_blank" rel="noopener noreferrer">Privacy</a> · <a href="/terms.html" target="_blank" rel="noopener noreferrer">Terms</a></span><span>Real locations · Google providers · No location fallbacks</span></footer>
     </main></div>
-  </div>;
+  </div></FestivalSearchContext.Provider>;
 }
