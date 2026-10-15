@@ -9,12 +9,46 @@ test('guide discovers real candidates, reviews unknown costs, keeps numbering sy
   await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check(); await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible();
 });
-test('manual rearrangement recalculates but preserves order until explicit optimization', async ({ page }) => {
+test('manual rearrangement waits for recalculation and preserves order until explicit optimization', async ({ page }) => {
   const state = await setup(page); await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible();
   await page.getByText('Adjust the planned visits', { exact: true }).click(); await page.getByRole('button', { name: 'Move Provider Museum up', exact: true }).click();
+  await page.waitForTimeout(1400); // Exceeds the former automatic recalculation delay.
+  expect(state.inputs).toHaveLength(1);
+  await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Recalculate my day', exact: true }).click();
   await expect.poll(() => state.inputs.length).toBe(2); expect(state.inputs[1].orderMode).toBe('manual'); expect(state.inputs[1].stops[0].locationId).toBe(state.bank[0].location.id);
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Your order was preserved');
   await page.getByRole('button', { name: 'Optimize route', exact: true }).click(); await expect.poll(() => state.inputs.length).toBe(3); expect(state.inputs[2].orderMode).toBe('smart');
+});
+
+test('form edits never plan automatically before or after a generated day', async ({ page }) => {
+  const state = await setup(page);
+  let discoveries = 0;
+  page.on('request', request => { if (request.url().endsWith('/api/guide/discover')) discoveries++; });
+  await page.getByRole('combobox', { name: 'Preferred pace', exact: true }).selectOption('relaxed');
+  await page.getByRole('button', { name: 'gardens', exact: true }).click();
+  await page.waitForTimeout(1400);
+  expect(state.inputs).toHaveLength(0); expect(discoveries).toBe(0);
+  await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
+  const review = page.getByRole('region', { name: 'Guided itinerary review', exact: true });
+  await expect(review).toBeVisible();
+  await page.getByLabel('Return by', { exact: true }).fill('19:30');
+  await page.getByRole('combobox', { name: 'Preferred pace', exact: true }).selectOption('packed');
+  await page.getByRole('button', { name: 'museums', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Include meal', exact: true }).uncheck();
+  await page.getByText('Adjust the planned visits', { exact: true }).click();
+  await page.getByLabel('Visit duration for Provider Garden', { exact: true }).fill('45');
+  await page.waitForTimeout(1400);
+  expect(state.inputs).toHaveLength(1); expect(discoveries).toBe(1);
+  await expect(review).toHaveCount(0);
+  await page.getByRole('button', { name: 'Recalculate my day', exact: true }).click();
+  await expect(review).toBeVisible();
+  expect(state.inputs).toHaveLength(2);
+  expect(state.inputs[1]).toMatchObject({ endTime: '19:30', preferences: { pace: 'packed', mealBreak: false } });
+  expect(state.inputs[1].preferences.interests).toEqual(expect.arrayContaining(['gardens', 'museums']));
+  expect(state.inputs[1].stops.find(row => row.locationId === state.bank[1].location.id)?.durationMinutes).toBe(45);
+  await page.waitForTimeout(1400);
+  expect(state.inputs).toHaveLength(2); expect(discoveries).toBe(1);
 });
 test('guide route failures remove stale previews and leave edits and retry available', async ({ page }) => {
   await setup(page); await page.route('**/api/guide/plan', r => r.fulfill({ status: 502, json: { error: { code: 'PROVIDER_UNAVAILABLE', message: 'Google comparison unavailable. Retry.' } } }));
@@ -84,9 +118,11 @@ test('an infeasible requested meal preserves the accepted itinerary and offers a
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await page.getByRole('button', { name: /My day plan/ }).click();
   await page.getByRole('checkbox', { name: 'Include meal', exact: true }).uncheck();
+  await page.getByRole('button', { name: 'Recalculate my day', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible();
   await page.route('**/api/guide/plan', r => r.fulfill({ status: 422, json: { error: { code: 'MEAL_INFEASIBLE', message: 'No nearby meal fits the detour limit. Adjust the duration or uncheck Include meal.' } } }));
   await page.getByRole('checkbox', { name: 'Include meal', exact: true }).check();
+  await page.getByRole('button', { name: 'Recalculate my day', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('No nearby meal fits');
   await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Provider Museum');
@@ -102,6 +138,7 @@ test('unchecking Include meal removes the restaurant and saves the exclusion pre
   const review = page.getByRole('region', { name: 'Guided itinerary review', exact: true });
   await expect(review.locator('.meal-route-note')).toHaveCount(1);
   await page.getByRole('checkbox', { name: 'Include meal', exact: true }).uncheck();
+  await page.getByRole('button', { name: 'Recalculate my day', exact: true }).click();
   await expect.poll(() => state.inputs.length).toBe(2);
   await expect(review.locator('.meal-route-note')).toHaveCount(0);
   await expect(review).not.toContainText('Provider Lunch');

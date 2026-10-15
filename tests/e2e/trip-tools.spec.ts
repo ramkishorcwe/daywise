@@ -139,7 +139,7 @@ test('new draft price allowances cannot replace the accepted trip price, includi
   };
   await allowances('10', '20'); await accept(page);
   await page.getByRole('button', { name: /My day plan/ }).click(); await page.getByText('Cost estimates, breaks and guide notes', { exact: true }).click();
-  await page.getByLabel('Arrival buffer (minutes)', { exact: true }).fill('15'); await expect.poll(() => state.inputs.length).toBe(2);
+  await page.getByLabel('Arrival buffer (minutes)', { exact: true }).fill('15'); await page.getByRole('button', { name: 'Recalculate my day', exact: true }).click(); await expect.poll(() => state.inputs.length).toBe(2);
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible(); await allowances('100', '200');
   await expect(page.getByTestId('trip-price-range')).toHaveText('$100.00 – $200.00');
   await page.getByRole('button', { name: 'Follow my day', exact: true }).click(); await expect(page.getByTestId('trip-price-range')).toHaveText('$10.00 – $20.00');
