@@ -18,8 +18,18 @@ export function suggestedVisitMinutes(facts: GuideCandidate['facts'], p: GuidePr
   const base = facts.categories.includes('museums') || facts.categories.includes('forts') || facts.categories.includes('palaces') ? 90 : facts.categories.includes('food') ? 45 : 60;
   return Math.round(base * (p.pace === 'relaxed' ? 1.25 : p.pace === 'packed' ? 0.75 : 1) + (p.groupType === 'seniors' || p.childAges.length ? 15 : 0));
 }
+export function matchingGuideInterests(facts: GuideCandidate['facts'], p: GuidePreferences) {
+  return p.interests.filter(interest => interest === 'hidden_gems' ? facts.reviews !== null && facts.reviews > 0 && facts.reviews < 300 : facts.categories.includes(interest));
+}
+export function guidePreferenceIssue(facts: GuideCandidate['facts'], p: GuidePreferences, meal = false): string | null {
+  if (!meal && p.interests.length && !matchingGuideInterests(facts, p).length) return 'does not match your selected interests';
+  if (!meal && p.environment !== 'any' && facts.environment !== p.environment) return `is not confirmed as ${p.environment}`;
+  if (p.mobility === 'wheelchair' && facts.accessible !== true) return 'does not have a confirmed wheelchair-accessible entrance';
+  if ((p.groupType === 'family' || p.childAges.length > 0) && facts.goodForChildren === false) return 'is reported unsuitable for children';
+  return null;
+}
 export function candidateScore(candidate: Pick<GuideCandidate, 'facts' | 'location'>, p: GuidePreferences) {
-  const f = candidate.facts, matched = f.categories.filter(c => p.interests.includes(c));
+  const f = candidate.facts, matched = matchingGuideInterests(f, p);
   const reasons = [matched.length ? `Matches your ${matched.join(', ').replaceAll('_', ' ')} interests.` : 'A provider-listed option for a first visit.'];
   let score = 15 + matched.length * 8 + (f.rating ?? 0) + Math.min(8, Math.log10((f.reviews ?? 0) + 1) * 2);
   if (f.hours.status === 'date_specific') { score += 3; reasons.push(f.hours.source === 'reviewed_catalog' ? 'Reviewed attraction evidence supplies periods for the travel date.' : 'Google supplies opening periods for the travel date.'); }
@@ -86,8 +96,7 @@ export function scheduleGuide(order: GuideStop[], candidates: GuideCandidate[], 
   for (let i = 0; i < order.length; i++) {
     const stop = order[i], candidate = candidates.find(c => c.location.id === stop.locationId)!;
     if (!candidate || candidate.facts.hours.status === 'closed') return null;
-    if (p.mobility === 'wheelchair' && candidate.facts.accessible === false) return null;
-    if ((p.groupType === 'family' || p.childAges.length > 0) && candidate.facts.goodForChildren === false) return null;
+    if (guidePreferenceIssue(candidate.facts, p, !!stop.mealKind)) return null;
     const leg = legs[i]; if (!Number.isFinite(leg.durationSeconds) || leg.durationSeconds < 0) return null;
     travelSeconds += leg.durationSeconds; distance += leg.distanceMeters; cursor += leg.durationSeconds * 1000 + p.bufferMinutes * 60000;
     const reached = cursor, duration = stop.durationMinutes * 60000;
@@ -122,8 +131,8 @@ export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedL
   const p = input.preferences;
   const timing: Timing = { ...liveDeparture(input, destination, now), lunchStart: zonedTime(input.date, '13:00', destination.timezone!), appointments: new Map(input.stops.filter(s => s.preferredTime).map(s => [s.locationId, zonedTime(input.date, s.preferredTime!, destination.timezone!)])) };
   const bands = { morning: [zonedTime(input.date, '06:00', destination.timezone!), zonedTime(input.date, '12:00', destination.timezone!)], afternoon: [zonedTime(input.date, '12:00', destination.timezone!), zonedTime(input.date, '16:00', destination.timezone!)], evening: [zonedTime(input.date, '16:00', destination.timezone!), zonedTime(input.date, '21:00', destination.timezone!)] };
-  const eligible = input.stops.filter(s => { const c = candidates.find(c => c.location.id === s.locationId); return c && !p.visitedPlaceIds.includes(c.location.placeId ?? '') && c.facts.hours.status !== 'closed'; });
-  if (eligible.length !== input.stops.length && input.stops.some(s => (s.mustVisit || s.locked) && !eligible.includes(s))) throw new Error('A must-visit or locked place is closed, already visited or unavailable. Review it before planning.');
+  const eligible = input.stops.filter(s => { const c = candidates.find(c => c.location.id === s.locationId); return c && !p.visitedPlaceIds.includes(c.location.placeId ?? '') && c.facts.hours.status !== 'closed' && !guidePreferenceIssue(c.facts, p, !!s.mealKind); });
+  if (eligible.length !== input.stops.length && input.stops.some(s => (s.mustVisit || s.locked) && !eligible.includes(s))) throw new Error('A must-visit or locked place conflicts with your preferences, is closed, already visited or unavailable. Review it before planning.');
   const pool = input.orderMode === 'manual' ? input.stops : [...eligible].sort((a, b) => Number(b.mustVisit || b.locked) - Number(a.mustVisit || a.locked) || candidateScore(candidates.find(c => c.location.id === b.locationId)!, p).score - candidateScore(candidates.find(c => c.location.id === a.locationId)!, p).score);
   if (input.stops.filter(s => s.mustVisit || s.locked).length > 5 || (input.orderMode === 'manual' && pool.length > 5) || input.stops.some((s, i) => s.locked && i >= 5)) throw new Error('A final route supports five visits. For manual ordering choose at most five, or move a locked place into the first five positions before locking it.');
   const index = (id: string) => candidates.findIndex(c => c.location.id === id) + 1;
@@ -139,7 +148,8 @@ export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedL
     const budget = budgetFor(order, candidates, p, schedule.distance, middayMealDue(input, destination, schedule.finish)); if (budget.status === 'over') continue;
     const timePreferencePenalty = schedule.rows.reduce((sum, row) => { const band = row.stop.timeBand; if (!band || band === 'any') return sum; const [opens, closes] = bands[band]; return sum + Math.min(180, Math.max(opens - row.arrival, row.arrival - closes, 0) / 60000) * 0.04; }, 0);
     const repeatedComplexPenalty = order.reduce((sum, stop, i) => sum + order.slice(i + 1).filter(other => sameAttractionComplex(candidates.find(c => c.location.id === stop.locationId)!, candidates.find(c => c.location.id === other.locationId)!)).length * 70, 0);
-    const score = order.reduce((sum, s) => sum + candidateScore(candidates.find(c => c.location.id === s.locationId)!, p).score + Math.max(0, ranking.length - ranking.indexOf(s.locationId)) * (ranking.includes(s.locationId) ? 2 : 0), 0) - schedule.travelSeconds / 60 * 0.08 - schedule.distance / 1000 * 0.025 - schedule.rows.reduce((sum, r) => sum + r.wait, 0) * 0.1 - timePreferencePenalty - repeatedComplexPenalty;
+    const coverage = new Set(order.flatMap(s => matchingGuideInterests(candidates.find(c => c.location.id === s.locationId)!.facts, p))).size;
+    const score = coverage * 12 + order.reduce((sum, s) => sum + candidateScore(candidates.find(c => c.location.id === s.locationId)!, p).score + Math.max(0, ranking.length - ranking.indexOf(s.locationId)) * (ranking.includes(s.locationId) ? 2 : 0), 0) - schedule.travelSeconds / 60 * 0.08 - schedule.distance / 1000 * 0.025 - schedule.rows.reduce((sum, r) => sum + r.wait, 0) * 0.1 - timePreferencePenalty - repeatedComplexPenalty;
     if (!best || score > best.score || (score === best.score && schedule.travelSeconds < best.schedule.travelSeconds)) best = { order, schedule, score };
   }
   if (!best) throw new Error('No feasible day fits these opening windows, travel times, visit allowances, locks and budget estimates. Remove optional visits, adjust times or revise your estimates.');

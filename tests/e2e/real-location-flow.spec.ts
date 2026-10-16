@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { zonedTime } from '../../packages/domain/src/time';
 import type { GuideCandidate, GuidePlanRequest } from '../../packages/contracts/src/guide';
 import type { SelectedLocation, LiveItinerary, LiveRouteInput } from '../../packages/contracts/src/locations';
+import { savedAcceptedTrips } from './helpers/accepted-trips';
 
 // Mock responses exist only in this test. Production has no location fixtures.
 const coordinates = { latitude: 51.5, longitude: -0.12 }, outsideCoordinates = { latitude: 48.85, longitude: 2.35 };
@@ -10,7 +11,7 @@ const identity = { placeId: 'provider-city-id', name: 'Provider city', countryCo
 function location(placeId: string, name: string, extra: Partial<SelectedLocation> = {}): SelectedLocation { return { id: randomUUID(), provider: 'google', source: 'search', placeId, name, address: `${name}, provider supplied address`, coordinates, city: identity, types: ['lodging'], fetchedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 1800000).toISOString(), persistence: 'memory_only', ...extra }; }
 const facts = () => ({ categories: ['history'] as const, environment: 'unknown' as const, rating: 4, reviews: 100, hours: { status: 'unknown' as const, windows: [], description: [] }, admission: null, accessible: null, goodForChildren: null, vegetarianOptions: null, website: null, providerUri: null, description: null, checkedAt: new Date().toISOString() });
 async function fulfillGuide(route: Route, itinerary: LiveItinerary) {
-  await route.fulfill({ json: { itinerary, orderMode: (route.request().postDataJSON() as GuidePlanRequest).orderMode, assistantMode: 'local', stops: itinerary.stops.map(stop => ({ locationId: stop.location.id, facts: facts(), cost: null, reasons: ['Test provider-backed candidate'], bufferMinutes: 10, travelMinutes: 10, waitingMinutes: 0, hoursStatus: 'unknown' })), budget: { currency: null, groupKnownMinimum: 0, groupKnownMaximum: 0, perPersonKnownMinimum: 0, perPersonKnownMaximum: 0, groupLimit: null, unknowns: ['Admission unknown'], status: 'unknown' }, breaks: [], assumptions: ['Test-only provider responses'], excluded: [], comparison: { originalTravelMinutes: 30, selectedTravelMinutes: itinerary.route.durationSeconds / 60, evaluatedSequences: 2 } } });
+  await route.fulfill({ json: { itinerary, orderMode: (route.request().postDataJSON() as GuidePlanRequest).orderMode, assistantMode: 'local', stops: itinerary.stops.map(stop => ({ locationId: stop.location.id, facts: facts(), cost: null, reasons: ['Test provider-backed candidate'], bufferMinutes: 10, travelMinutes: 10, waitingMinutes: 0, hoursStatus: 'unknown' })), budget: { currency: (route.request().postDataJSON() as GuidePlanRequest).preferences.currency, groupKnownMinimum: 0, groupKnownMaximum: 0, perPersonKnownMinimum: 0, perPersonKnownMaximum: 0, groupLimit: null, unknowns: ['Admission unknown'], status: 'unknown' }, breaks: [], assumptions: ['Test-only provider responses'], excluded: [], comparison: { originalTravelMinutes: 30, selectedTravelMinutes: itinerary.route.durationSeconds / 60, evaluatedSequences: 2 } } });
 }
 async function acceptGuide(page: Page) { await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check(); await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click(); }
 async function mocks(page: Page, outside = false) {
@@ -204,10 +205,11 @@ test('return selection, saved provider references and accepted routes remain ind
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible(); expect(state.routeInputs[0].returnToStart).toBe(false); expect(state.routeInputs[0].endId).not.toBe(state.routeInputs[0].startId);
   await acceptGuide(page); await page.getByRole('button', { name: 'My day plan', exact: true }).click(); await choose(page, 'Starting location', 'replacementhotel'); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Follow my day', exact: true }).click(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Start: Chosen provider-hotel-id'); await page.getByRole('button', { name: 'My day plan', exact: true }).click();
-  await page.getByLabel('Private day name', { exact: true }).fill('Private saved day'); await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await expect(page.getByRole('region', {name:'Guided itinerary review',exact:true})).toBeVisible(); await page.getByRole('button', { name: 'Save day preferences', exact: true }).click(); await expect(page.getByText(/Private day preferences saved/)).toBeVisible();
-  const saved = await page.evaluate(() => new Promise<unknown[]>((resolve, reject) => { const opening = indexedDB.open('daywise-live', 1); opening.onerror = () => reject(opening.error); opening.onsuccess = () => { const db = opening.result, result = db.transaction('days').objectStore('days').getAll(); result.onsuccess = () => { db.close(); resolve(result.result); }; }; }));
-  expect(JSON.stringify(saved)).toContain('provider-replacementhotel-id'); expect(JSON.stringify(saved)).not.toMatch(/provider supplied address|encodedPolyline|expiresAt|latitude/);
-  await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await page.getByRole('button', { name: 'Open saved day', exact: true }).click(); await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toHaveValue('Chosen provider-replacementhotel-id');
+  await page.getByLabel('Private day name', { exact: true }).fill('Private saved day'); await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await expect(page.getByRole('region', {name:'Guided itinerary review',exact:true})).toBeVisible(); await acceptGuide(page);
+  await expect.poll(async () => (await savedAcceptedTrips(page)).length).toBe(2);
+  const saved = await savedAcceptedTrips(page); expect(JSON.stringify(saved)).toContain('provider-replacementhotel-id'); expect(JSON.stringify(saved)).not.toContain('"receipt":');
+  await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await page.locator('.saved-card').filter({ hasText: 'Private saved day' }).getByRole('button', { name: 'Open saved itinerary', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Start: Chosen provider-replacementhotel-id');
 });
 
 test('Google map pin resolves a real selected point instead of using a default map center as the source', async ({ page }) => {
@@ -231,12 +233,20 @@ test('a late route preview cannot overwrite newer source edits', async ({ page }
   await page.goto('/?live=1'); await essentials(page); const started = page.waitForRequest(request => request.url().endsWith('/guide/plan')); await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await started;
   await choose(page, 'Starting location', 'newersource'); release(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toHaveCount(0); await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toHaveValue('Chosen provider-newersource-id');
 });
-test('real-location budget records keep actual separate from booked and require review after a new acceptance', async ({ page }) => {
+test('accepted price summaries stay with saved itineraries without a separate budget tab', async ({ page }) => {
   await mocks(page); await page.goto('/?live=1'); await essentials(page); await page.locator('.live-preferences summary').click(); await page.getByLabel('Budget currency', { exact: true }).selectOption('GBP');
-  await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await acceptGuide(page); await page.getByRole('button', { name: 'Trip budget', exact: true }).click();
-  await page.getByLabel('Whole-category amount (GBP)', { exact: true }).fill('40'); await page.getByRole('button', { name: 'Save category amount', exact: true }).click(); await page.getByLabel('Cost status', { exact: true }).selectOption('actual'); await page.getByLabel('Whole-category amount (GBP)', { exact: true }).fill('30'); await page.getByRole('button', { name: 'Save category amount', exact: true }).click();
-  await expect(page.getByTestId('reported-effective-total')).toContainText('£30.00'); await page.getByRole('button', { name: 'My day plan', exact: true }).click(); await page.getByText('Adjust the planned visits', { exact: true }).click(); await page.getByLabel('Visit duration for Chosen provider-landmark-id', { exact: true }).fill('45'); await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await acceptGuide(page); await page.getByRole('button', { name: 'Trip budget', exact: true }).click();
-  await expect(page.getByText(/needs review for this route/)).toHaveCount(2); await page.getByRole('button', { name: 'Reviewed amounts for this route', exact: true }).click(); await expect(page.getByTestId('reported-effective-total')).toContainText('£30.00');
+  await page.getByLabel('Private day name', { exact: true }).fill('First priced trip');
+  await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await acceptGuide(page);
+  await expect(page.getByRole('button', { name: 'Trip budget', exact: true })).toHaveCount(0);
+  await page.getByText('Add missing cost ranges', { exact: true }).click();
+  await page.getByLabel('Additional food & drinks minimum', { exact: true }).fill('30'); await page.getByLabel('Additional food & drinks maximum', { exact: true }).fill('40');
+  await page.getByRole('button', { name: 'Apply price ranges', exact: true }).click(); await expect(page.getByTestId('trip-price-range')).toHaveText('£30.00 – £40.00');
+  await page.getByRole('button', { name: 'My day plan', exact: true }).click(); await page.getByLabel('Private day name', { exact: true }).fill('Second priced trip');
+  await page.getByText('Adjust the planned visits', { exact: true }).click(); await page.getByLabel('Visit duration for Chosen provider-landmark-id', { exact: true }).fill('45');
+  await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await acceptGuide(page);
+  await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(2);
+  await page.locator('.saved-card').filter({ hasText: 'First priced trip' }).getByRole('button', { name: 'Open saved itinerary', exact: true }).click();
+  await expect(page.getByTestId('trip-price-range')).toHaveText('£30.00 – £40.00');
 });
 test('an invalid selected-place response never confirms typed text or substitutes coordinates', async ({ page }) => {
   await mocks(page); await page.route('**/api/locations/resolve', route => route.fulfill({ json: { ...location('provider-invalid-id', 'Invalid result'), coordinates: { latitude: 91, longitude: 0 } } }));

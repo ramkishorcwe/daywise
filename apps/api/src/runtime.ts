@@ -16,6 +16,7 @@ import { MaintenanceStore } from './maintenance';
 import { webOriginFromEnvironment } from './web-origin';
 import { validateGoogleConfiguration } from '../../../packages/data-adapters/src/google-config';
 import { GoogleGuidePlaces } from '../../../packages/data-adapters/src/google-guide';
+import { GeminiFestivalSearch } from '../../../packages/data-adapters/src/festival-search';
 
 export async function configuredServer(hosted = false) {
   const webOrigin = webOriginFromEnvironment(process.env);
@@ -44,6 +45,6 @@ export async function configuredServer(hosted = false) {
   const { keys, issues } = validateGoogleConfiguration(process.env);
   const routes = keys.GOOGLE_ROUTES_API_KEY ? new GoogleRoutes(keys.GOOGLE_ROUTES_API_KEY) : undefined;
   const locationCapabilities = { autocomplete: !!keys.GOOGLE_PLACES_API_KEY, reverseGeocode: !!keys.GOOGLE_GEOCODING_API_KEY, timezone: !!keys.GOOGLE_TIME_ZONE_API_KEY, routing: !!routes };
-  const server = await createServer({ ...adapters, ...(hosted ? { receipts: new EvidenceReceipts(process.env.EVIDENCE_RECEIPT_SECRET ?? ''), hostedBudget: new FirestoreBudget((adapters as ReturnType<typeof firebaseAdapters>).db), shares: new FirestoreSharedTrips((adapters as ReturnType<typeof firebaseAdapters>).db) } : {}), interpreter, aiDailyLimit, providerDailyLimit, operatorToken, fixtures: false, catalog: new CheckedCatalog(catalog.cities), routes, liveRoutes: routes, locations: Object.values(locationCapabilities).some(Boolean) ? new GoogleLocations(keys.GOOGLE_PLACES_API_KEY, keys.GOOGLE_GEOCODING_API_KEY, keys.GOOGLE_TIME_ZONE_API_KEY) : undefined, guide: keys.GOOGLE_PLACES_API_KEY ? new GoogleGuidePlaces(keys.GOOGLE_PLACES_API_KEY) : undefined, locationCapabilities, locationConfigurationIssues: issues, places: keys.GOOGLE_PLACES_API_KEY ? new GooglePlaces(keys.GOOGLE_PLACES_API_KEY) : undefined, webOrigin, logger: true });
+  const server = await createServer({ ...adapters, ...(assistantMode === 'gemini' && process.env.FESTIVAL_SEARCH_ENABLED !== 'false' ? { festivalSearch: new GeminiFestivalSearch(process.env.GEMINI_API_KEY!, process.env.FESTIVAL_SEARCH_MODEL || process.env.GEMINI_MODEL!) } : {}), ...(hosted ? { receipts: new EvidenceReceipts(process.env.EVIDENCE_RECEIPT_SECRET ?? ''), hostedBudget: new FirestoreBudget((adapters as ReturnType<typeof firebaseAdapters>).db), shares: new FirestoreSharedTrips((adapters as ReturnType<typeof firebaseAdapters>).db) } : {}), interpreter, aiDailyLimit, providerDailyLimit, operatorToken, fixtures: false, catalog: new CheckedCatalog(catalog.cities), routes, liveRoutes: routes, locations: Object.values(locationCapabilities).some(Boolean) ? new GoogleLocations(keys.GOOGLE_PLACES_API_KEY, keys.GOOGLE_GEOCODING_API_KEY, keys.GOOGLE_TIME_ZONE_API_KEY) : undefined, guide: keys.GOOGLE_PLACES_API_KEY ? new GoogleGuidePlaces(keys.GOOGLE_PLACES_API_KEY) : undefined, locationCapabilities, locationConfigurationIssues: issues, places: keys.GOOGLE_PLACES_API_KEY ? new GooglePlaces(keys.GOOGLE_PLACES_API_KEY) : undefined, webOrigin, logger: true });
   return server;
 }

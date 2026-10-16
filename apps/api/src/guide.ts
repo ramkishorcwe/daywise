@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { mealKinds, guideDiscoverSchema, guideCandidateRequestSchema, guidePlanRequestSchema, candidateSchema, guideDiscoverySchema, guidePlanSchema, guideRankingSchema, type GuideCandidate, type GuidePreferences, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../../../packages/contracts/src/guide';
 import { startMatchesDestination, type SelectedLocation } from '../../../packages/contracts/src/locations';
-import { candidateScore, suggestedVisitMinutes, chooseGuideOrder, guideResult, middayMealDue, middayMealRequested, scheduleGuide } from '../../../packages/domain/src/guide-planner';
+import { candidateScore, suggestedVisitMinutes, chooseGuideOrder, guideResult, middayMealDue, middayMealRequested, scheduleGuide, guidePreferenceIssue } from '../../../packages/domain/src/guide-planner';
 import { liveDeparture } from '../../../packages/domain/src/live-itinerary';
 import { factsFor, type GuidePlacesProvider, type GuidePlace } from '../../../packages/data-adapters/src/google-guide';
 import type { ServerOptions } from './server';
@@ -15,6 +15,7 @@ import { pricedCandidate } from '../../../packages/domain/src/travel-pricing';
 import { FrankfurterRates } from '../../../packages/data-adapters/src/exchange-rates';
 import { mealSearchAnchors, chooseMealInsertion, validateMealDetours } from '../../../packages/domain/src/meal-planner';
 import { z } from 'zod';
+import { placePhotoRequestSchema, placePhotoSchema } from '../../../packages/contracts/src/place-photo';
 
 export function registerGuideRoutes(app: FastifyInstance, context: { options: ServerOptions; locations: LocationRegistry; guard: ProviderGuard; owner: (request: FastifyRequest) => string; interpreter: IntentInterpreter; assistant: AssistantService; catalog: CheckedCatalog }) {
   const { options, locations, guard, owner, interpreter, assistant, catalog } = context;
@@ -57,7 +58,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
         await guard.consume(); const results = await source.nearbyRestaurants(anchor.location.coordinates, body.preferences.meals!.nearbyMeters);
         groups.push(results.filter(raw => {
           const facts = factsFor(raw, body.date, destination.timezone!);
-          return !used.has(raw.id) && facts.categories.includes('food') && facts.mealServices?.[kind] !== false && !['unknown', 'closed'].includes(facts.hours.status) && !(body.preferences.mobility === 'wheelchair' && facts.accessible === false) && !(body.preferences.childAges.length && facts.goodForChildren === false) && !(body.preferences.dietaryRules.length && facts.vegetarianOptions === false);
+          return !used.has(raw.id) && facts.categories.includes('food') && facts.mealServices?.[kind] !== false && !['unknown', 'closed'].includes(facts.hours.status) && !guidePreferenceIssue(facts, body.preferences, true) && !(body.preferences.dietaryRules.length && facts.vegetarianOptions === false);
         }));
       }
       // Keep the existing ten-point matrix bound, sharing the shortlist across anchors.
@@ -81,12 +82,20 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     }
     return { order, candidates, matrix };
   }
+  app.post('/api/guide/photo', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const { placeId } = placePhotoRequestSchema.parse(request.body);
+    reply.header('Cache-Control', 'private, no-store');
+    const source = provider();
+    if (!source.photo) return { photo: null };
+    await guard.consume();
+    return placePhotoSchema.parse(await source.photo(placeId, async () => { await guard.consume(); }));
+  });
   app.post('/api/guide/discover', { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } }, async request => {
     const body = guideDiscoverSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), source = provider();
     const localToday = new Intl.DateTimeFormat('en-CA', { timeZone: destination.timezone!, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     if (body.date < localToday || Date.parse(body.date) > Date.parse(localToday) + 7 * 86400000) throw new ApiError(422, 'GUIDE_DATE', 'Choose today or a date in the next seven days.');
     await guard.consume(); const raw = await source.discover(destination.name, destination.coordinates, body.preferences), candidates: GuideCandidate[] = [], warnings: string[] = [];
-    const ranked = raw.filter(r => !body.preferences.visitedPlaceIds.includes(r.id)).map(r => ({ raw: r, facts: factsFor(r, body.date, destination.timezone!) })).filter(r => r.facts.categories.length && r.facts.hours.status !== 'closed' && !(body.preferences.mobility === 'wheelchair' && r.facts.accessible === false)).sort((a, b) => candidateScore({ location: { ...destination, name: a.raw.displayName.text }, facts: b.facts }, body.preferences).score - candidateScore({ location: { ...destination, name: b.raw.displayName.text }, facts: a.facts }, body.preferences).score).slice(0, 8);
+    const ranked = raw.filter(r => !body.preferences.visitedPlaceIds.includes(r.id)).map(r => ({ raw: r, facts: factsFor(r, body.date, destination.timezone!) })).filter(r => r.facts.categories.length && r.facts.hours.status !== 'closed' && !guidePreferenceIssue(r.facts, body.preferences)).sort((a, b) => candidateScore({ location: destination, facts: b.facts }, body.preferences).score - candidateScore({ location: destination, facts: a.facts }, body.preferences).score).slice(0, 8);
     for (const item of ranked) {
       try {
         await guard.consume(); const reversed = await options.locations!.reverse(item.raw.location);
@@ -95,14 +104,17 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
         candidates.push(await price(save(who, location, item.raw, body.date, destination.timezone!, body.preferences), body.preferences));
       } catch (error) { if (error instanceof ApiError) throw error; warnings.push('A result could not be location-validated and was excluded. Check Geocoding if this repeats.'); }
     }
-    if (!candidates.length) throw new ApiError(422, 'NO_GUIDE_CANDIDATES', 'No suitable real attractions could be verified. Try different interests, relax optional preferences or add places by search.');
+    if (!candidates.length) throw new ApiError(422, 'NO_GUIDE_CANDIDATES', 'No verified places match your selected interests and visit preferences. Change your interests or indoor/outdoor choice, or try another date. Your preferences were not relaxed.');
     warnings.push('Only a bounded provider shortlist is reviewed. Ratings indicate popularity; cultural significance, admission and special events may be unknown.');
     return guideDiscoverySchema.parse({ candidates, warnings, assistantMode: interpreter.mode });
   });
   app.post('/api/guide/candidate', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async request => {
     const body = guideCandidateRequestSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), location = locations.get(who, body.locationId);
     if (!location.placeId || location.source !== 'search') throw new ApiError(422, 'GUIDE_PLACE_REQUIRED', 'Search and select a real attraction before adding it to the guide.');
-    await guard.consume(); const raw = await provider().facts(location.placeId); return price(save(who, location, raw, body.date, destination.timezone!, body.preferences), body.preferences);
+    await guard.consume(); const raw = await provider().facts(location.placeId);
+    const issue = guidePreferenceIssue(factsFor(raw, body.date, destination.timezone!), body.preferences);
+    if (issue) throw new ApiError(422, 'GUIDE_PREFERENCE_MISMATCH', `${location.name} ${issue}. Change your preferences or select a matching place.`);
+    return price(save(who, location, raw, body.date, destination.timezone!, body.preferences), body.preferences);
   });
   app.post('/api/guide/plan', { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async request => {
     const body = guidePlanRequestSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), start = locations.get(who, body.startId), end = body.returnToStart ? start : locations.get(who, body.endId!);
@@ -111,7 +123,17 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     if (!startMatchesDestination(start, destination) && !body.allowOutsideStart) throw new ApiError(422, 'START_CITY_MISMATCH', 'Review and consent to the starting city difference before guide planning.');
     if (!options.liveRoutes?.matrix) throw new ApiError(503, 'GUIDE_ROUTING_NOT_CONFIGURED', 'Configure Google Routes API for real travel-time comparison.');
     let departure: number; try { departure = liveDeparture(body, destination).departure; } catch (error) { throw new ApiError(422, 'INVALID_DEPARTURE', error instanceof Error ? error.message : 'Invalid departure.'); }
-    const candidates = await Promise.all(body.stops.map(s => price(candidateFor(who, s.locationId, body.date), body.preferences)));
+    let candidates = body.stops.map(s => candidateFor(who, s.locationId, body.date));
+    const rejected = body.stops.filter(s => guidePreferenceIssue(candidates.find(c => c.location.id === s.locationId)!.facts, body.preferences));
+    const conflict = rejected.find(s => body.orderMode === 'manual' || s.mustVisit || s.locked || body.stops.slice(body.stops.indexOf(s) + 1).some(row => row.locked));
+    if (conflict) {
+      const c = candidates.find(c => c.location.id === conflict.locationId)!;
+      throw new ApiError(422, 'GUIDE_PREFERENCE_MISMATCH', `${c.location.name} ${guidePreferenceIssue(c.facts, body.preferences)}. Press Plan my day to find matching places, or change your preferences; the saved trip is preserved.`);
+    }
+    body.stops = body.stops.filter(s => !rejected.includes(s));
+    candidates = candidates.filter(c => body.stops.some(s => s.locationId === c.location.id));
+    if (!candidates.length) throw new ApiError(422, 'GUIDE_PREFERENCE_MISMATCH', 'Your previous visits no longer match the selected preferences. Press Plan my day to discover matching places. Your saved trip is preserved.');
+    candidates = await Promise.all(candidates.map(c => price(c, body.preferences)));
     const originalChoices = structuredClone(body.stops); let usedAlternatives = false;
     return guard.run(who, `${request.headers['idempotency-key']}-guide`, body, async () => {
     const coordinates = [start.coordinates, ...candidates.map(c => c.location.coordinates), end.coordinates];

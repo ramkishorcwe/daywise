@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { guidePreferencesSchema, guidePlanRequestSchema, type GuideCandidate, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../packages/contracts/src/guide';
 import { locationSchema, type SelectedLocation } from '../packages/contracts/src/locations';
-import { candidateScore, suggestedVisitMinutes, budgetFor, chooseGuideOrder, guideResult } from '../packages/domain/src/guide-planner';
+import { candidateScore, suggestedVisitMinutes, budgetFor, chooseGuideOrder, guideResult, guidePreferenceIssue } from '../packages/domain/src/guide-planner';
 import { openingWindows, GoogleGuidePlaces, type GuidePlace } from '../packages/data-adapters/src/google-guide';
 import { GoogleRoutes, type LiveRouteProvider } from '../packages/data-adapters/src/google';
 import { OpenAIInterpreter } from '../packages/data-adapters/src/assistant';
@@ -28,6 +28,33 @@ it('scores first-time candidates from interests and real popularity, and exposes
   expect(suggestedVisitMinutes(a.facts, { ...preferences(), pace: 'relaxed' })).toBeGreaterThan(suggestedVisitMinutes(a.facts, { ...preferences(), pace: 'packed' }));
 });
 it('selects the interest-matching attraction when only one can fit', () => { const cs = [candidate(1, ['history']), candidate(2, ['temples'])], body = input(cs); body.preferences.interests = ['temples']; body.endTime = '10:00'; const result = chooseGuideOrder(body, location(), cs, matrix(2)); expect(result.order).toHaveLength(1); expect(result.order[0].locationId).toBe(cs[1].location.id); });
+it('excludes unrelated famous attractions instead of filling the day outside selected interests', () => {
+  const cs = [candidate(1, ['forts', 'history']), candidate(2, ['temples']), candidate(3, ['gardens']), candidate(4, ['museums'])], body = input(cs);
+  cs[0].facts.rating = 5; cs[0].facts.reviews = 100000; body.preferences.interests = ['temples', 'gardens', 'museums', 'food'];
+  const result = chooseGuideOrder(body, location(), cs, matrix(cs.length), [cs[0].location.id]);
+  expect(result.order).toHaveLength(3); expect(result.order.some(s => s.locationId === cs[0].location.id)).toBe(false);
+  const route = { provider: 'google_routes' as const, mode: 'DRIVE' as const, durationSeconds: 2400, distanceMeters: 1000, encodedPolyline: 'test-only', departureTime: `${date}T09:00:00Z`, fetchedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString(), trafficBasis: 'prediction_for_departure' as const, persistence: 'memory_only' as const, legs: Array.from({ length: 2 }, () => ({ durationSeconds: 600, distanceMeters: 100 })), optimizedOrder: [0] };
+  expect(() => guideResult(body, location(), location(), location(), cs, [choice(cs[0])], route, { originalTravelMinutes: 20, selectedTravelMinutes: 20, evaluatedSequences: 1 }, 'local')).toThrow('no longer fits');
+});
+it('requires matching environment evidence and confirmed wheelchair entrance without treating unknown as a match', () => {
+  const c = candidate(1), p = { ...preferences(), environment: 'outdoor' as const };
+  expect(guidePreferenceIssue(c.facts, p)).toContain('not confirmed as outdoor');
+  c.facts.environment = 'indoor'; expect(guidePreferenceIssue(c.facts, p)).not.toBeNull();
+  c.facts.environment = 'outdoor'; expect(guidePreferenceIssue(c.facts, p)).toBeNull();
+  p.mobility = 'wheelchair'; expect(guidePreferenceIssue(c.facts, p)).toContain('wheelchair');
+  c.facts.accessible = true; expect(guidePreferenceIssue(c.facts, p)).toBeNull();
+});
+it('keeps optional meals independent of sightseeing interests and never silently drops locked preference conflicts', () => {
+  const cs = [candidate(1, ['food']), candidate(2, ['temples'])], body = input(cs); body.preferences.interests = ['temples'];
+  expect(guidePreferenceIssue(cs[0].facts, body.preferences)).not.toBeNull(); expect(guidePreferenceIssue(cs[0].facts, body.preferences, true)).toBeNull();
+  body.stops[0].locked = true; expect(() => chooseGuideOrder(body, location(), cs, matrix(2))).toThrow('conflicts with your preferences');
+  body.stops[0].locked = false; body.orderMode = 'manual'; expect(() => chooseGuideOrder(body, location(), cs, matrix(2))).toThrow('No feasible');
+});
+it('treats no selected interests as unrestricted and uses an explicit lower-review proxy for hidden gems', () => {
+  const c = candidate(1), p = preferences(); p.interests = []; expect(guidePreferenceIssue(c.facts, p)).toBeNull();
+  p.interests = ['hidden_gems']; c.facts.reviews = null; expect(guidePreferenceIssue(c.facts, p)).not.toBeNull();
+  c.facts.reviews = 400; expect(guidePreferenceIssue(c.facts, p)).not.toBeNull(); c.facts.reviews = 100; expect(guidePreferenceIssue(c.facts, p)).toBeNull();
+});
 it('avoids counting several provider-confirmed sub-attractions in one complex as separate long visits', () => {
   const cs = [candidate(1), candidate(2), candidate(3)], body = input(cs); cs[1].location.coordinates = { ...cs[0].location.coordinates, latitude: cs[0].location.coordinates.latitude + 0.0001 }; cs[1].facts.containingPlaceIds = [cs[0].location.placeId!];
   const result = chooseGuideOrder(body, location(), cs, matrix(3)); expect(result.order).toHaveLength(2); expect(result.order.some(s => s.locationId === cs[2].location.id)).toBe(true);
@@ -55,12 +82,21 @@ it('considers the full bounded shortlist, including an affordable eighth candida
   for (let i = 0; i < cs.length; i++) cs[i].facts.admission = { minimum: i === 7 ? 0 : 20, maximum: i === 7 ? 0 : 20, currency: 'USD', basis: 'person', source: 'reviewed_catalog', sourceUrl: 'https://official.example/admission' };
   const result = chooseGuideOrder(body, location(), cs, matrix(8)); expect(result.order.map(s => s.locationId)).toEqual([cs[7].location.id]); expect(result.evaluated).toBeLessThanOrEqual(8800);
 });
-it('honors visited, wheelchair and child suitability constraints without inventing evidence', () => { const cs = [candidate(1), candidate(2)], body = input(cs); body.preferences.mobility = 'wheelchair'; cs[0].facts.accessible = false; body.preferences.visitedPlaceIds = [cs[0].location.placeId!]; expect(chooseGuideOrder(body, location(), cs, matrix(2)).order[0].locationId).toBe(cs[1].location.id); body.preferences.mobility = 'standard'; body.preferences.visitedPlaceIds = []; body.preferences.childAges = [7]; cs[0].facts.goodForChildren = false; cs[1].facts.goodForChildren = true; expect(chooseGuideOrder(body, location(), cs, matrix(2)).order.map(s => s.locationId)).toEqual([cs[1].location.id]); expect(candidateScore(cs[1], body.preferences).score).toBeGreaterThan(candidateScore(cs[0], body.preferences).score); });
+it('honors visited, wheelchair and child suitability constraints without inventing evidence', () => { const cs = [candidate(1), candidate(2)], body = input(cs); body.preferences.mobility = 'wheelchair'; cs[0].facts.accessible = false; cs[1].facts.accessible = true; body.preferences.visitedPlaceIds = [cs[0].location.placeId!]; expect(chooseGuideOrder(body, location(), cs, matrix(2)).order[0].locationId).toBe(cs[1].location.id); body.preferences.mobility = 'standard'; body.preferences.visitedPlaceIds = []; body.preferences.childAges = [7]; cs[0].facts.goodForChildren = false; cs[1].facts.goodForChildren = true; expect(chooseGuideOrder(body, location(), cs, matrix(2)).order.map(s => s.locationId)).toEqual([cs[1].location.id]); expect(candidateScore(cs[1], body.preferences).score).toBeGreaterThan(candidateScore(cs[0], body.preferences).score); });
 it('supports unknown hours honestly while rejecting a closed day and malformed cost ranges', () => { const cs = [candidate(1)], body = input(cs); cs[0].facts.hours.status = 'unknown'; cs[0].facts.hours.windows = []; expect(chooseGuideOrder(body, location(), cs, matrix(1)).order).toHaveLength(1); expect(guidePlanRequestSchema.safeParse({ ...body, stops: [{ ...body.stops[0], costEstimate: { minimum: 10, maximum: 5, currency: 'USD', basis: 'person' } }] }).success).toBe(false); });
 const rawPlace = (id: string): GuidePlace => { const calendar = { year: Number(date.slice(0, 4)), month: Number(date.slice(5, 7)), day: Number(date.slice(8)) }; const weekday = new Date(date + 'T12:00:00Z').getUTCDay(); return { id, displayName: { text: 'Provider museum' }, formattedAddress: 'Provider address', location: { latitude: 51.01, longitude: 0 }, types: ['museum'], currentOpeningHours: { periods: [{ open: { date: calendar, day: weekday, hour: 9, minute: 0 }, close: { date: calendar, day: weekday, hour: 18, minute: 0 } }] } }; };
 it('uses dated Google opening periods, recognizes closure, and leaves missing hours unknown', () => { const raw = rawPlace('provider-raw-place'); expect(openingWindows(raw, date, 'UTC').status).toBe('date_specific'); expect(openingWindows({ ...raw, currentOpeningHours: { periods: [] } }, date, 'UTC').status).toBe('closed'); expect(openingWindows({ ...raw, currentOpeningHours: undefined }, date, 'UTC').status).toBe('unknown'); });
 it('deduplicates discovery, excludes permanently closed and unlocated results, and requests actual facts', async () => { const raw = rawPlace('provider-raw-place'), request = vi.fn<typeof fetch>(async () => Response.json({ places: [raw, raw, { ...raw, id: 'closed-provider-place', businessStatus: 'CLOSED_PERMANENTLY' }, { ...raw, id: 'unlocated-provider-place', location: undefined }] })); const result = await new GoogleGuidePlaces('mock-key', request).discover('Provider city', { latitude: 51, longitude: 0 }, preferences()); expect(result).toHaveLength(1); const options = request.mock.calls[0][1]!; expect(JSON.parse(options.body as string).textQuery).toContain('Provider city'); expect(JSON.stringify(options.headers)).toContain('currentOpeningHours'); });
 it('provider discovery failure is actionable and never returns sample attractions', async () => { await expect(new GoogleGuidePlaces('mock-key', async () => new Response('', { status: 403 })).discover('Provider city', { latitude: 51, longitude: 0 }, preferences())).rejects.toThrow('Google rejected'); });
+it('searches all selected interests without truncating the list or adding default categories', async () => {
+  const request = vi.fn<typeof fetch>(async () => Response.json({ places: [] })), p = preferences(); p.interests = ['temples', 'gardens', 'museums', 'food', 'nightlife'];
+  const provider = new GoogleGuidePlaces('mock-key', request); await provider.discover('Provider city', { latitude: 51, longitude: 0 }, p);
+  const query = JSON.parse(request.mock.calls[0][1]!.body as string).textQuery;
+  for (const interest of p.interests) expect(query).toContain(interest);
+  expect(query).not.toContain('famous landmarks');
+  p.interests = []; await provider.discover('Provider city', { latitude: 51, longitude: 0 }, p);
+  expect(JSON.parse(request.mock.calls[1][1]!.body as string).textQuery).toBe('places to visit in Provider city');
+});
 it('matrix handles omitted protobuf zero indices and unavailable edges without fictitious travel', async () => { const request = vi.fn<typeof fetch>(async () => Response.json([{ condition: 'ROUTE_EXISTS', duration: '0s', status: {} }, { destinationIndex: 1, condition: 'ROUTE_NOT_FOUND', status: { code: 5 } }])); const result = await new GoogleRoutes('mock-key', request).matrix([{ latitude: 51, longitude: 0 }, { latitude: 52, longitude: 0 }], new Date().toISOString(), 'WALK'); expect(result[0][0]).toEqual({ durationSeconds: 0, distanceMeters: 0 }); expect(result[0][1]).toBeNull(); const body = JSON.parse(request.mock.calls[0][1]!.body as string); expect(body.travelMode).toBe('WALK'); expect(body.departureTime).toBeUndefined(); });
 it('AI ranks only supplied IDs, rejects hallucinated IDs, and never receives GPS coordinates', async () => { const cs = [candidate(1), candidate(2)], context = { preferences: preferences(), candidates: cs.map(c => ({ id: c.location.id, name: c.location.name, categories: c.facts.categories, rating: c.facts.rating, reviews: c.facts.reviews })) }; const request = vi.fn<typeof fetch>(async () => Response.json({ status: 'completed', output: [{ type: 'function_call', name: 'rank_verified_candidates', arguments: JSON.stringify({ rankedIds: [randomUUID()], interests: ['history'] }) }] })); await expect(new OpenAIInterpreter('mock-key', 'configured-model', request).rankGuide(context)).rejects.toThrow('unverified'); expect(JSON.parse(request.mock.calls[0][1]!.body as string).store).toBe(false); expect(request.mock.calls[0][1]!.body).not.toContain('latitude'); });
 
@@ -75,6 +111,50 @@ async function api(extra: Partial<Parameters<typeof createServer>[0]> = {}, prof
   const body = input(candidates.length ? candidates : [candidate(999)]); body.destinationId = destination.id; body.startId = destination.id; body.preferences = profile;
   return { app, post, body, candidates, auth, token, matrixCall, routeCall, discovery };
 }
+it('discovery and final planning strictly use any of the selected interests, with no unrelated fallback', async () => {
+  const raw = [
+    { ...rawPlace('provider-unrelated-fort'), displayName: { text: 'Popular Fort' }, types: ['tourist_attraction'], rating: 5, userRatingCount: 100000 },
+    { ...rawPlace('provider-selected-temple'), displayName: { text: 'Selected Temple' }, types: ['hindu_temple'] },
+    { ...rawPlace('provider-selected-garden'), displayName: { text: 'Selected Garden' }, types: ['park'] },
+    { ...rawPlace('provider-selected-museum'), displayName: { text: 'Selected Museum' }, types: ['museum'] },
+  ];
+  const p = preferences(); p.interests = ['temples', 'gardens', 'museums', 'food'];
+  const a = await api({ guide: { discover: async () => raw, facts: async id => raw.find(r => r.id === id)! } }, p);
+  expect(a.discovery.statusCode).toBe(200); expect(a.candidates).toHaveLength(3);
+  expect(a.candidates.some(c => c.location.name === 'Popular Fort')).toBe(false);
+  const plan = await a.post('/api/guide/plan', a.body); expect(plan.statusCode, plan.body).toBe(200);
+  expect(plan.json().stops.every((s: { facts: GuideCandidate['facts'] }) => !guidePreferenceIssue(s.facts, p))).toBe(true);
+});
+it('returns an actionable no-match error without substituting other categories', async () => {
+  const p = preferences(); p.interests = ['temples'];
+  const a = await api({}, p);
+  expect(a.discovery.statusCode).toBe(422); expect(a.discovery.json().error.code).toBe('NO_GUIDE_CANDIDATES');
+  expect(a.discovery.json().error.message).toContain('preferences were not relaxed'); expect(a.matrixCall).not.toHaveBeenCalled();
+});
+it('revalidates edited preferences before AI or routing and rejects incompatible manual or locked visits', async () => {
+  const rankGuide = vi.fn(async () => ({ rankedIds: [], interests: [] }));
+  const a = await api({ interpreter: { mode: 'gemini', rankGuide, interpret: async () => ({ intent: 'summary', minutes: null, pace: null, placeId: null }) } });
+  a.body.preferences.interests = ['temples'];
+  for (const orderMode of ['manual', 'smart'] as const) {
+    a.body.orderMode = orderMode; a.body.stops[0].locked = orderMode === 'smart';
+    const response = await a.post('/api/guide/plan', a.body); expect(response.statusCode).toBe(422); expect(response.json().error.code).toBe('GUIDE_PREFERENCE_MISMATCH');
+  }
+  a.body.stops[0].locked = false;
+  const noMatch = await a.post('/api/guide/plan', a.body); expect(noMatch.statusCode).toBe(422); expect(noMatch.json().error.code).toBe('GUIDE_PREFERENCE_MISMATCH');
+  expect(rankGuide).not.toHaveBeenCalled(); expect(a.matrixCall).not.toHaveBeenCalled(); expect(a.routeCall).not.toHaveBeenCalled();
+});
+it('removes newly incompatible optional visits before supplying candidates to Gemini and the route matrix', async () => {
+  const raw = [{ ...rawPlace('provider-existing-fort'), displayName: { text: 'Old Fort' }, types: ['tourist_attraction'] }, rawPlace('provider-existing-museum')];
+  const rankGuide = vi.fn(async (context: import('../packages/data-adapters/src/assistant').GuideAIContext) => ({ rankedIds: context.candidates.map(c => c.id), interests: ['museums' as const], visits: context.candidates.map(c => ({ locationId: c.id, durationMinutes: 60, timeBand: 'any' as const })) }));
+  const a = await api({ guide: { discover: async () => raw, facts: async id => raw.find(c => c.id === id)! }, interpreter: { mode: 'gemini', rankGuide, interpret: async () => ({ intent: 'summary', minutes: null, pace: null, placeId: null }) } });
+  expect(a.candidates).toHaveLength(2); a.body.preferences.interests = ['museums'];
+  const response = await a.post('/api/guide/plan', a.body); expect(response.statusCode, response.body).toBe(200);
+  expect(rankGuide.mock.calls[0][0].candidates.map(c => c.name)).toEqual(['Provider museum']);
+  expect(a.matrixCall.mock.calls[0][0]).toHaveLength(3); expect(response.json().itinerary.stops).toHaveLength(1);
+  a.body.stops.find(s => a.candidates.find(c => c.location.id === s.locationId)!.location.name === 'Provider museum')!.locked = true;
+  const locked = await a.post('/api/guide/plan', a.body); expect(locked.statusCode).toBe(422); expect(locked.json().error.code).toBe('GUIDE_PREFERENCE_MISMATCH');
+  expect(rankGuide).toHaveBeenCalledTimes(1);
+});
 
 it('plans on a new hosted replica with authentic location and guide receipts, and rejects forged facts', async () => {
   const receipts = new EvidenceReceipts(randomBytes(32).toString('base64url'));

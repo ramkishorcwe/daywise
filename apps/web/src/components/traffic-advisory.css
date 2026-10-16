@@ -1,0 +1,12 @@
+.traffic-advisory { margin: .75rem 0 1rem; font-size: .875rem; line-height: 1.5; }
+.traffic-advisory-warning { padding: 1rem; border: 1px solid #dbbd75; border-left: 4px solid #aa7116; border-radius: 10px; background: #fff8e8; color: #63450d; }
+.traffic-advisory ul { margin: .6rem 0; padding-left: 1.2rem; }
+.traffic-advisory li + li { margin-top: .75rem; }
+.traffic-advisory li p, .traffic-advisory p { margin: .4rem 0; font-size: inherit; }
+.traffic-advisory a { color: #65480c; text-decoration: underline; overflow-wrap: anywhere; }
+.traffic-advisory details { font-size: .8rem; }
+.traffic-advisory summary { cursor: pointer; }
+.traffic-advisory details p { max-width: 75ch; }
+.local-festival-check { margin: .75rem 0; }
+.local-event-warning { margin: .65rem 0; }
+.festival-search-suggestions { display: block; width: 100%; height: 140px; border: 0; margin-top: .5rem; background: white; border-radius: 8px; }
