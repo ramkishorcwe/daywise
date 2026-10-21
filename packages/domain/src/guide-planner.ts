@@ -1,4 +1,4 @@
-import type { GuideCandidate, GuidePreferences, GuideStop, GuidePlanRequest, TravelMatrix, GuidePlan } from '../../contracts/src/guide';
+import type { GuideCandidate, GuidePreferences, GuideStop, GuidePlanRequest, TravelMatrix, GuidePlan, GuidePlanStyle } from '../../contracts/src/guide';
 import type { SelectedLocation, LiveRoute } from '../../contracts/src/locations';
 import { liveDeparture } from './live-itinerary';
 import { zonedTime } from './time';
@@ -127,7 +127,7 @@ export function scheduleGuide(order: GuideStop[], candidates: GuideCandidate[], 
   return cursor + missingMealAllowance * 60000 <= deadline ? { rows, breaks, finish: cursor, travelSeconds, distance } : null;
 }
 function sequences<T>(items: T[], prefix: T[] = []): T[][] { if (prefix.length === 5) return [prefix]; return prefix.length ? [prefix, ...items.flatMap((item, i) => sequences(items.filter((_, j) => i !== j), [...prefix, item]))] : items.flatMap((item, i) => sequences(items.filter((_, j) => i !== j), [item])); }
-export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedLocation, candidates: GuideCandidate[], matrix: TravelMatrix, ranking: string[] = [], now = Date.now(), banned = new Set<string>(), maxVisits = 5) {
+export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedLocation, candidates: GuideCandidate[], matrix: TravelMatrix, ranking: string[] = [], now = Date.now(), banned = new Set<string>(), maxVisits = 5, style?: GuidePlanStyle) {
   const p = input.preferences;
   const timing: Timing = { ...liveDeparture(input, destination, now), lunchStart: zonedTime(input.date, '13:00', destination.timezone!), appointments: new Map(input.stops.filter(s => s.preferredTime).map(s => [s.locationId, zonedTime(input.date, s.preferredTime!, destination.timezone!)])) };
   const bands = { morning: [zonedTime(input.date, '06:00', destination.timezone!), zonedTime(input.date, '12:00', destination.timezone!)], afternoon: [zonedTime(input.date, '12:00', destination.timezone!), zonedTime(input.date, '16:00', destination.timezone!)], evening: [zonedTime(input.date, '16:00', destination.timezone!), zonedTime(input.date, '21:00', destination.timezone!)] };
@@ -139,8 +139,11 @@ export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedL
   const legsFor = (order: GuideStop[]) => { const indices = [0, ...order.map(s => index(s.locationId)), candidates.length + 1]; return indices.slice(1).map((to, i) => matrix[indices[i]]?.[to] ?? null); };
   const originalLegs = legsFor(input.stops), originalTravelMinutes = originalLegs.every(Boolean) ? originalLegs.reduce((sum, leg) => sum + leg!.durationSeconds, 0) / 60 : null;
   let best: { order: GuideStop[]; schedule: Schedule; score: number } | null = null, evaluated = 0;
+  const requiredSlots = Math.max(input.stops.filter(s => s.mustVisit || s.locked).length, ...input.stops.map((s, i) => s.locked ? i + 1 : 0));
   for (const order of input.orderMode === 'manual' ? [pool] : sequences(pool)) {
     if (order.length > maxVisits) continue;
+    // Comparison styles change priorities, never the user's visit allowances or constraints.
+    if (style === 'relaxed' && order.length > Math.max(3, requiredSlots)) continue;
     if (banned.has(order.map(s => s.locationId).join(':')) || !order.some(s => candidates.find(c => c.location.id === s.locationId)?.location.city?.placeId === destination.city?.placeId)) continue;
     if (input.stops.some((s, i) => (s.mustVisit && !order.includes(s)) || (s.locked && order[i]?.locationId !== s.locationId))) continue;
     const legs = legsFor(order); if (legs.some(l => !l)) continue; evaluated++;
@@ -148,8 +151,14 @@ export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedL
     const budget = budgetFor(order, candidates, p, schedule.distance, middayMealDue(input, destination, schedule.finish)); if (budget.status === 'over') continue;
     const timePreferencePenalty = schedule.rows.reduce((sum, row) => { const band = row.stop.timeBand; if (!band || band === 'any') return sum; const [opens, closes] = bands[band]; return sum + Math.min(180, Math.max(opens - row.arrival, row.arrival - closes, 0) / 60000) * 0.04; }, 0);
     const repeatedComplexPenalty = order.reduce((sum, stop, i) => sum + order.slice(i + 1).filter(other => sameAttractionComplex(candidates.find(c => c.location.id === stop.locationId)!, candidates.find(c => c.location.id === other.locationId)!)).length * 70, 0);
+    if (style && order.some((stop, i) => order.slice(i + 1).some(other => sameAttractionComplex(candidates.find(c => c.location.id === stop.locationId)!, candidates.find(c => c.location.id === other.locationId)!) && !((stop.mustVisit || stop.locked) && (other.mustVisit || other.locked))))) continue;
     const coverage = new Set(order.flatMap(s => matchingGuideInterests(candidates.find(c => c.location.id === s.locationId)!.facts, p))).size;
-    const score = coverage * 12 + order.reduce((sum, s) => sum + candidateScore(candidates.find(c => c.location.id === s.locationId)!, p).score + Math.max(0, ranking.length - ranking.indexOf(s.locationId)) * (ranking.includes(s.locationId) ? 2 : 0), 0) - schedule.travelSeconds / 60 * 0.08 - schedule.distance / 1000 * 0.025 - schedule.rows.reduce((sum, r) => sum + r.wait, 0) * 0.1 - timePreferencePenalty - repeatedComplexPenalty;
+    const baseScore = coverage * 12 + order.reduce((sum, s) => sum + candidateScore(candidates.find(c => c.location.id === s.locationId)!, p).score + Math.max(0, ranking.length - ranking.indexOf(s.locationId)) * (ranking.includes(s.locationId) ? 2 : 0), 0) - schedule.travelSeconds / 60 * 0.08 - schedule.distance / 1000 * 0.025 - schedule.rows.reduce((sum, r) => sum + r.wait, 0) * 0.1 - timePreferencePenalty - repeatedComplexPenalty;
+    const meaningfulDay = order.length >= Math.min(2, eligible.length) ? 1e7 : 0;
+    const score = style === 'sightseeing' ? order.length * 10000 + baseScore
+      : style === 'less_travel' ? meaningfulDay - schedule.travelSeconds - schedule.distance * 0.0001 + baseScore * 0.0001
+      : style === 'relaxed' ? meaningfulDay - (schedule.finish - timing.departure) / 60000 + baseScore * 0.01
+      : baseScore;
     if (!best || score > best.score || (score === best.score && schedule.travelSeconds < best.schedule.travelSeconds)) best = { order, schedule, score };
   }
   if (!best) throw new Error('No feasible day fits these opening windows, travel times, visit allowances, locks and budget estimates. Remove optional visits, adjust times or revise your estimates.');

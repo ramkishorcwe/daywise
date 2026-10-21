@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { guidePreferencesSchema, guidePlanRequestSchema, type GuideCandidate, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../packages/contracts/src/guide';
+import { guidePreferencesSchema, guidePlanRequestSchema, guideComparisonSchema, guidePlanStyles, type GuideCandidate, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../packages/contracts/src/guide';
 import { locationSchema, type SelectedLocation } from '../packages/contracts/src/locations';
 import { candidateScore, suggestedVisitMinutes, budgetFor, chooseGuideOrder, guideResult, guidePreferenceIssue } from '../packages/domain/src/guide-planner';
 import { openingWindows, GoogleGuidePlaces, type GuidePlace } from '../packages/data-adapters/src/google-guide';
-import { GoogleRoutes, type LiveRouteProvider } from '../packages/data-adapters/src/google';
+import { GoogleRoutes, ProviderError, type LiveRouteProvider } from '../packages/data-adapters/src/google';
 import { OpenAIInterpreter } from '../packages/data-adapters/src/assistant';
 import { createServer } from '../apps/api/src/server';
 import { localAuthenticator } from '../apps/api/src/auth';
@@ -167,6 +167,9 @@ it('plans on a new hosted replica with authentic location and guide receipts, an
   const payload = { ...first.body, _evidence: { locations: [destination.receipt!, ...first.candidates.map(c => c.location.receipt!)], guides: first.candidates.map(c => c.receipt!) } };
   const result = await second.inject({ method: 'POST', url: '/api/guide/plan', headers: { authorization: `Bearer ${first.token}`, 'idempotency-key': randomUUID() }, payload });
   expect(result.statusCode).toBe(200); expect(result.json().itinerary.start.id).toBe(destination.id);
+  const compared = await second.inject({ method: 'POST', url: '/api/guide/compare', headers: { authorization: `Bearer ${first.token}`, 'idempotency-key': randomUUID() }, payload });
+  expect(compared.statusCode, compared.body).toBe(200);
+  expect(guideComparisonSchema.parse(compared.json()).options.every(o => o.status === 'ready' && o.plan.itinerary.start.id === destination.id)).toBe(true);
   const forged = structuredClone(payload); forged._evidence.guides[0] = 'A'.repeat(60);
   const invalid = await second.inject({ method: 'POST', url: '/api/guide/plan', headers: { authorization: `Bearer ${first.token}`, 'idempotency-key': randomUUID() }, payload: forged });
   expect(invalid.statusCode).toBe(409); expect(invalid.json().error.code).toBe('EVIDENCE_UNAVAILABLE');
@@ -322,4 +325,93 @@ it('rejects meal labels supplied by clients and refuses a final restaurant route
   a.routeCall.mockImplementation(async (...args) => { const route = await original(...args); return { ...route, legs: route.legs.map(leg => ({ ...leg, distanceMeters: 5000 })) }; });
   const response = await a.post('/api/guide/plan', a.body);
   expect(response.statusCode).toBe(422); expect(response.json().error.code).toBe('MEAL_FINAL_ROUTE_INFEASIBLE'); expect(response.json().itinerary).toBeUndefined();
+});
+
+it('comparison styles make different trade-offs without changing visit allowances or ordinary planning', () => {
+  const cs = Array.from({ length: 5 }, (_, i) => candidate(i + 1)), body = input(cs), m = matrix(5);
+  const original = structuredClone(body);
+  const plans = guidePlanStyles.map(style => chooseGuideOrder(body, location(), cs, m, [], Date.now(), new Set(), 5, style));
+  expect(plans[0].order).toHaveLength(5); expect(plans[1].order).toHaveLength(2); expect(plans[2].order.length).toBeLessThanOrEqual(3);
+  expect(plans[1].schedule.travelSeconds).toBeLessThan(plans[0].schedule.travelSeconds);
+  expect(plans[2].schedule.finish).toBeLessThan(plans[0].schedule.finish);
+  expect(plans.every(plan => plan.order.every(s => s.durationMinutes === 30))).toBe(true);
+  expect(body).toEqual(original); expect(chooseGuideOrder(body, location(), cs, m).order).toHaveLength(5);
+});
+
+it('all comparison styles retain budget, opening, strict interests, locks and required stops', () => {
+  const cs = Array.from({ length: 5 }, (_, i) => candidate(i + 1)), body = input(cs);
+  body.preferences.groupBudget = 30; body.stops[0].mustVisit = true; body.stops[1].locked = true;
+  cs[2].facts.categories = ['temples']; cs[3].facts.hours.status = 'closed';
+  cs[4].facts.admission = { minimum: 100, maximum: 100, currency: 'USD', basis: 'group', source: 'user_estimate', sourceUrl: null };
+  for (const style of guidePlanStyles) {
+    const chosen = chooseGuideOrder(body, location(), cs, matrix(5), [], Date.now(), new Set(), 5, style);
+    expect(chosen.order.map(s => s.locationId)).toEqual([cs[0].location.id, cs[1].location.id]);
+  }
+  body.stops[4].mustVisit = true;
+  for (const style of guidePlanStyles) expect(() => chooseGuideOrder(body, location(), cs, matrix(5), [], Date.now(), new Set(), 5, style)).toThrow('No feasible');
+});
+
+it('relaxed comparison respects four must-visits and sightseeing does not pad a day with the same complex', () => {
+  const cs = Array.from({ length: 4 }, (_, i) => candidate(i + 1)), body = input(cs);
+  body.stops.forEach(s => s.mustVisit = true);
+  expect(chooseGuideOrder(body, location(), cs, matrix(4), [], Date.now(), new Set(), 5, 'relaxed').order).toHaveLength(4);
+  body.stops.forEach(s => s.mustVisit = false); cs[1].facts.containingPlaceIds = [cs[0].location.placeId!]; cs[1].location.coordinates = cs[0].location.coordinates;
+  expect(chooseGuideOrder(body, location(), cs, matrix(4), [], Date.now(), new Set(), 5, 'sightseeing').order).toHaveLength(3);
+});
+
+async function comparisonApi(ai = false) {
+  const raw = Array.from({ length: 5 }, (_, i) => ({ ...rawPlace(`provider-comparison-${i}`), displayName: { text: `Comparison museum ${i}` }, location: { latitude: 51.01 + i / 100, longitude: 0 } }));
+  const rankGuide = vi.fn(async (context: import('../packages/data-adapters/src/assistant').GuideAIContext) => ({ rankedIds: context.candidates.map(c => c.id), interests: ['history' as const], visits: context.candidates.map(c => ({ locationId: c.id, durationMinutes: 30, timeBand: 'any' as const })) }));
+  const a = await api({ guide: { discover: async () => raw, facts: async id => raw.find(r => r.id === id)! }, ...(ai ? { interpreter: { mode: 'gemini' as const, rankGuide, interpret: async () => ({ intent: 'summary' as const, minutes: null, pace: null, placeId: null }) } } : {}) });
+  return { ...a, rankGuide };
+}
+
+it('comparison uses one matrix and AI call, real final routes and honest duplicate/cost labels', async () => {
+  const a = await comparisonApi(true), key = randomUUID();
+  const response = await a.post('/api/guide/compare', a.body, key); expect(response.statusCode, response.body).toBe(200);
+  const comparison = guideComparisonSchema.parse(response.json());
+  expect(comparison.options.map(o => o.style)).toEqual([...guidePlanStyles]);
+  expect(comparison.options.every(o => o.status === 'ready')).toBe(true);
+  if (comparison.options[0].status !== 'ready' || comparison.options[1].status !== 'ready') throw new Error('Expected ready comparisons');
+  expect(comparison.options[0].plan.itinerary.stops).toHaveLength(5);
+  expect(comparison.options[1].plan.itinerary.stops).toHaveLength(2);
+  expect(comparison.options.every(o => o.status === 'ready' && o.plan.budget.status === 'unknown' && o.plan.budget.unknowns.length > 0)).toBe(true);
+  expect(comparison.options[2]).toMatchObject({ status: 'ready', sameAs: 'less_travel' });
+  expect(a.rankGuide).toHaveBeenCalledTimes(1); expect(a.matrixCall).toHaveBeenCalledTimes(1); expect(a.routeCall).toHaveBeenCalledTimes(2);
+  expect((await a.post('/api/guide/compare', a.body, key)).statusCode).toBe(409); expect(a.rankGuide).toHaveBeenCalledTimes(1);
+});
+
+it('comparison preserves a separate return location and rejects expired or foreign-owner evidence', async () => {
+  const a = await comparisonApi(), end = (await a.post('/api/locations/resolve', { placeId: 'provider-return-point', sessionToken: randomUUID(), destinationCity: false })).json<SelectedLocation>();
+  a.body.returnToStart = false; a.body.endId = end.id;
+  const response = await a.post('/api/guide/compare', a.body); expect(response.statusCode).toBe(200);
+  const comparison = guideComparisonSchema.parse(response.json());
+  expect(comparison.options.every(o => o.status === 'ready' && o.plan.itinerary.end.id === end.id && o.plan.itinerary.start.id === a.body.startId)).toBe(true);
+  expect((await a.post('/api/guide/compare', a.body, randomUUID(), a.auth.issue!().token)).statusCode).toBe(409);
+  a.body.date = new Date(Date.parse(date) + 86400000).toISOString().slice(0, 10);
+  expect((await a.post('/api/guide/compare', a.body)).statusCode).toBe(409);
+});
+
+it('comparison retains completed alternatives when a later provider fails and sends no automatic retry', async () => {
+  const a = await comparisonApi(), original = a.routeCall.getMockImplementation()!;
+  a.routeCall.mockImplementation(async (...args) => { if (args[2].length < 5) throw new ProviderError('QUOTA', 'Google routing quota reached. Retry later.'); return original(...args); });
+  const response = await a.post('/api/guide/compare', a.body); expect(response.statusCode).toBe(200);
+  const comparison = guideComparisonSchema.parse(response.json());
+  expect(comparison.options[0].status).toBe('ready');
+  expect(comparison.options.slice(1).every(o => o.status === 'unavailable' && o.code === 'PROVIDER_QUOTA')).toBe(true);
+  expect(a.routeCall).toHaveBeenCalledTimes(2);
+});
+
+it('comparison validates meals for each option without dropping an enabled meal or inventing restaurants', async () => {
+  const a = await mealApi(); a.body.orderMode = 'smart';
+  const response = await a.post('/api/guide/compare', a.body); expect(response.statusCode, response.body).toBe(200);
+  const comparison = guideComparisonSchema.parse(response.json());
+  expect(comparison.options[0].status).toBe('ready');
+  for (const option of comparison.options) if (option.status === 'ready') {
+    const t = option.plan.itinerary;
+    if (t.finishAt > `${date}T13:00:00.000Z`) expect(option.plan.stops.some(s => s.mealKind === 'lunch')).toBe(true);
+    expect(t.end.id).toBe(a.body.startId);
+    expect(Date.parse(t.finishAt)).toBeLessThanOrEqual(Date.parse(t.deadlineAt));
+    expect(option.plan.stops.filter(s => s.mealKind).every(s => s.mealDetour!.extraMinutes <= 15 && s.mealDetour!.fromPreviousMeters <= 1500)).toBe(true);
+  }
 });

@@ -1,5 +1,7 @@
 # Daywise day guide: implementation and setup
 
+For the additional More sightseeing / Less travelling / Relaxed day flow, see [Compare three plans](plan-comparison.md). Ordinary Plan my day remains available.
+
 ## Use the feature
 
 Open the existing planner, confirm a destination and starting location, and choose a date and start/return times. Set optional interests, pace, group, mobility and cost preferences, then choose **Plan my day**. The guide discovers the candidates, chooses the visits and calculates their order automatically. The main screen has no Visit 1/Visit 2, add-attraction or manual candidate-selection form.

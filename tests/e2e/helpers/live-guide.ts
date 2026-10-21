@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
-import { guidePreferencesSchema } from '../../../packages/contracts/src/guide';
+import { guidePreferencesSchema, guidePlanStyles } from '../../../packages/contracts/src/guide';
 import { pricedCandidate, groupCost } from '../../../packages/domain/src/travel-pricing';
 import { budgetFor } from '../../../packages/domain/src/guide-planner';
 import type { GuideCandidate, GuidePlan, GuidePlanRequest, GuideStop } from '../../../packages/contracts/src/guide';
@@ -26,8 +26,7 @@ export async function setup(page: Page, withMeals = false, withPrices = false, f
   await page.route('**/api/locations/resolve', async r => { const body = r.request().postDataJSON(); const l = createLocation(body.destinationCity ? withPrices ? 'Jaipur' : 'Provider city' : 'Provider start', body.destinationCity); places.set(l.id, l); await r.fulfill({ json: l }); });
   await page.route('**/api/guide/discover', async r => { const p = guidePreferencesSchema.parse(r.request().postDataJSON().preferences); await r.fulfill({ json: { candidates: withPrices ? await Promise.all(bank.map(c => pricedCandidate(c, p, rates))) : bank, warnings: ['Admission costs are unverified.'], assistantMode: 'local' } }); });
   await page.route('**/api/guide/photo', r => r.fulfill({ json: { photo: null } }));
-  await page.route('**/api/guide/plan', async r => {
-    const body = r.request().postDataJSON() as GuidePlanRequest; inputs.push(body);
+  const buildPlan = async (body: GuidePlanRequest) => {
     let rows: GuideStop[] = body.orderMode === 'smart' && !body.stops.some(s => s.locked) ? [...body.stops].reverse() : body.stops;
     if (withMeals) {
       rows = rows.flatMap((row, i) => [row, ...(i === 0 && body.preferences.meals?.lunch.enabled ? [{ ...row, locationId: foodBank[0].location.id, durationMinutes: body.preferences.meals.lunch.durationMinutes, mealKind: 'lunch' as const }] : []), ]);
@@ -41,10 +40,20 @@ export async function setup(page: Page, withMeals = false, withPrices = false, f
       plan.budget = budgetFor(rows, priced, p, plan.itinerary.route.distanceMeters);
       plan.stops.forEach(row => { const facts = priced.find(c => c.location.id === row.locationId)!.facts; row.facts = facts; row.cost = facts.admission; if (row.cost) row.groupCost = { ...groupCost(row.cost, p), currency: row.cost.currency, basis: 'group' }; if (row.mealKind && facts.mealCost) row.mealCost = facts.mealCost; });
     }
-    await r.fulfill({ json: plan });
+    return plan;
+  };
+  await page.route('**/api/guide/plan', async r => {
+    const body = r.request().postDataJSON() as GuidePlanRequest; inputs.push(body);
+    await r.fulfill({ json: await buildPlan(body) });
+  });
+  const comparisons: GuidePlanRequest[] = [];
+  await page.route('**/api/guide/compare', async r => {
+    const body = r.request().postDataJSON() as GuidePlanRequest; comparisons.push(body);
+    const options = await Promise.all(guidePlanStyles.map(async style => ({ style, status: 'ready' as const, plan: await buildPlan({ ...body, stops: style === 'sightseeing' ? body.stops : body.stops.slice(0, 1) }), ...(style === 'relaxed' ? { sameAs: 'less_travel' as const } : {}) })));
+    await r.fulfill({ json: { options } });
   });
   await page.goto('/?live=1');
   for (const label of ['Destination city', 'Starting location']) { await page.getByRole('combobox', { name: label, exact: true }).fill('search'); await page.getByRole('listbox', { name: `${label} suggestions` }).getByRole('button').first().click(); await expect(page.getByRole('region', { name: `${label} picker` }).locator('.validated-location')).toBeVisible(); }
   await page.getByLabel('Travel date', { exact: true }).fill(date);
-  return { inputs, bank };
+  return { inputs, comparisons, bank };
 }

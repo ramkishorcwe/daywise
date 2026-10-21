@@ -65,4 +65,12 @@ export const guidePlanSchema = z.strictObject({
   comparison: z.strictObject({ originalTravelMinutes: z.number().nonnegative().nullable(), selectedTravelMinutes: z.number().nonnegative(), evaluatedSequences: z.number().int().nonnegative() }),
 });
 export type GuidePlan = z.infer<typeof guidePlanSchema>;
+export const guidePlanStyles = ['sightseeing', 'less_travel', 'relaxed'] as const;
+export type GuidePlanStyle = typeof guidePlanStyles[number];
+export const guideComparisonOptionSchema = z.discriminatedUnion('status', [
+  z.strictObject({ style: z.enum(guidePlanStyles), status: z.literal('ready'), plan: guidePlanSchema, sameAs: z.enum(guidePlanStyles).optional() }),
+  z.strictObject({ style: z.enum(guidePlanStyles), status: z.literal('unavailable'), code: z.string().max(100), reason: z.string().max(1000) }),
+]);
+export const guideComparisonSchema = z.strictObject({ options: z.array(guideComparisonOptionSchema).length(3) }).refine(value => value.options.every((option, index) => option.style === guidePlanStyles[index]), 'Each plan style must appear once in the expected order.');
+export type GuideComparison = z.infer<typeof guideComparisonSchema>;
 export type TravelMatrix = Array<Array<{ durationSeconds: number; distanceMeters: number } | null>>;
