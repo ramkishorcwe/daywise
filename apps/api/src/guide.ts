@@ -139,6 +139,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
   });
   async function generatePlans(request: FastifyRequest, compare = false) {
     const body = guidePlanRequestSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), start = locations.get(who, body.startId), end = body.returnToStart ? start : locations.get(who, body.endId!);
+    if (compare && body.chosenPlaces) throw new ApiError(422, 'CHOSEN_COMPARISON', 'Optimize your chosen places as one route. Compare plans is available in the automatic planner.');
     if (compare && body.orderMode !== 'smart') throw new ApiError(422, 'COMPARISON_SMART_REQUIRED', 'Compare plans uses smart ordering. Recalculate my day keeps your manual order.');
     if (body.stops.some(s => s.mealKind)) throw new ApiError(422, 'MEAL_SERVER_SELECTED', 'Request meals through the meal preferences. Restaurants are validated and selected by the server.');
     if (typeof request.headers['idempotency-key'] !== 'string' || !/^[A-Za-z0-9_-]{8,80}$/.test(request.headers['idempotency-key'])) throw new ApiError(400, 'IDEMPOTENCY_REQUIRED', 'Use a fresh valid request key for guide planning.');
@@ -146,6 +147,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     if (!options.liveRoutes?.matrix) throw new ApiError(503, 'GUIDE_ROUTING_NOT_CONFIGURED', 'Configure Google Routes API for real travel-time comparison.');
     let departure: number; try { departure = liveDeparture(body, destination).departure; } catch (error) { throw new ApiError(422, 'INVALID_DEPARTURE', error instanceof Error ? error.message : 'Invalid departure.'); }
     let candidates = body.stops.map(s => candidateFor(who, s.locationId, body.date));
+    if (body.chosenPlaces && candidates.some(c => !c.location.city || c.location.city.countryCode !== destination.city?.countryCode)) throw new ApiError(422, 'CHOSEN_PLACE_COUNTRY', 'Choose visits in the destination country. Check their addresses before optimizing.');
     const rejected = body.stops.filter(s => guidePreferenceIssue(candidates.find(c => c.location.id === s.locationId)!.facts, body.preferences));
     const conflict = rejected.find(s => body.orderMode === 'manual' || s.mustVisit || s.locked || body.stops.slice(body.stops.indexOf(s) + 1).some(row => row.locked));
     if (conflict) {
@@ -181,8 +183,8 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     const banned = new Set<string>(); let maxVisits = 5;
     for (let attempt = 0; attempt < (body.orderMode === 'manual' ? 1 : 2); attempt++) {
       let selected: ReturnType<typeof chooseGuideOrder>;
-      try { selected = chooseGuideOrder(body, destination, candidates, matrix, ranking, Date.now(), banned, maxVisits, style, aiVisits); } catch (error) {
-        throw new ApiError(422, 'GUIDE_INFEASIBLE', error instanceof Error ? error.message : 'No feasible day.');
+      try { selected = chooseGuideOrder(body, destination, candidates, matrix, ranking, Date.now(), banned, maxVisits, body.chosenPlaces ? 'less_travel' : style, aiVisits); } catch (error) {
+        throw new ApiError(422, 'GUIDE_INFEASIBLE', body.chosenPlaces ? 'All chosen visits cannot fit the available time, opening windows and known budget. Reduce a visit duration, remove a place, extend your trip or revise the budget. No visit was silently removed.' : error instanceof Error ? error.message : 'No feasible day.');
       }
       const final = await addMeals(who, body, destination, start, end, candidates, selected.order, matrix, departure, cache);
       const points = final.order.map(s => final.candidates.find(c => c.location.id === s.locationId)!.location.coordinates);

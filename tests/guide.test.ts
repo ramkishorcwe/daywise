@@ -22,6 +22,24 @@ const choice = (c: GuideCandidate): GuideStop => ({ locationId: c.location.id, d
 function input(cs: GuideCandidate[]): GuidePlanRequest { return guidePlanRequestSchema.parse({ destinationId: randomUUID(), startId: randomUUID(), endId: null, returnToStart: true, allowOutsideStart: false, date, startTime: '09:00', endTime: '18:00', preferences: preferences(), orderMode: 'smart', stops: cs.map(choice) }); }
 function matrix(count: number, minutes = 10): TravelMatrix { return Array.from({ length: count + 2 }, (_, i) => Array.from({ length: count + 2 }, (_, j) => ({ durationSeconds: i === j ? 0 : minutes * 60, distanceMeters: i === j ? 0 : minutes * 300 }))); }
 function bestMatrix(): TravelMatrix { const m = matrix(3, 30); for (const [a, b] of [[0, 2], [2, 3], [3, 1], [1, 4]]) m[a][b] = { durationSeconds: 120, distanceMeters: 300 }; return m; }
+it('chosen-place optimization finds the lowest travel order while preserving every visit and duration', () => {
+  const cs = [candidate(1), candidate(2), candidate(3)], body = input(cs);
+  body.preferences.interests = []; body.preferences.useAI = false; body.chosenPlaces = true;
+  body.stops.forEach((s, i) => { s.mustVisit = true; s.durationMinutes = 35 + i * 5; s.durationSource = 'user'; });
+  const result = chooseGuideOrder(body, location(), cs, bestMatrix(), [], Date.now(), new Set(), 5, 'less_travel');
+  expect(result.order.map(row => row.locationId)).toEqual([cs[1].location.id, cs[2].location.id, cs[0].location.id]);
+  expect(result.order.map(row => row.durationMinutes)).toEqual([40, 45, 35]); expect(result.schedule.travelSeconds).toBe(480);
+  body.endTime = '09:45'; expect(() => chooseGuideOrder(body, location(), cs, bestMatrix(), [], Date.now(), new Set(), 5, 'less_travel')).toThrow('No feasible day');
+});
+it('chosen-place request validation cannot enable AI, omit a required visit, use manual ordering or exceed five visits', () => {
+  const cs = Array.from({ length: 6 }, (_, i) => candidate(i + 1)), body = input(cs.slice(0, 2));
+  body.chosenPlaces = true; body.preferences.useAI = false; body.stops.forEach(s => s.mustVisit = true);
+  expect(guidePlanRequestSchema.safeParse(body).success).toBe(true);
+  expect(guidePlanRequestSchema.safeParse({ ...body, preferences: { ...body.preferences, useAI: true } }).success).toBe(false);
+  expect(guidePlanRequestSchema.safeParse({ ...body, stops: body.stops.map(s => ({ ...s, mustVisit: false })) }).success).toBe(false);
+  expect(guidePlanRequestSchema.safeParse({ ...body, orderMode: 'manual' }).success).toBe(false);
+  expect(guidePlanRequestSchema.safeParse({ ...body, stops: cs.map(c => ({ ...choice(c), mustVisit: true })) }).success).toBe(false);
+});
 it('scores first-time candidates from interests and real popularity, and exposes duration assumptions', () => {
   const a = candidate(1, ['history']), b = candidate(2, ['temples']), p = { ...preferences(), interests: ['temples'] as const };
   expect(candidateScore(b, { ...p, interests: [...p.interests] }).score).toBeGreaterThan(candidateScore(a, { ...p, interests: [...p.interests] }).score);
@@ -251,6 +269,19 @@ async function api(extra: Partial<Parameters<typeof createServer>[0]> = {}, prof
   const body = input(candidates.length ? candidates : [candidate(999)]); body.destinationId = destination.id; body.startId = destination.id; body.preferences = profile;
   return { app, post, body, candidates, auth, token, matrixCall, routeCall, discovery };
 }
+it('chosen-place API preserves all chosen visits, bypasses Gemini and fails rather than dropping an infeasible visit', async () => {
+  const rankGuide = vi.fn(async () => ({ rankedIds: [], interests: [] }));
+  const p = preferences(); p.interests = []; p.useAI = false;
+  const a = await api({ interpreter: { mode: 'gemini', rankGuide, interpret: async () => ({ intent: 'summary', minutes: null, pace: null, placeId: null }) } }, p);
+  a.body.chosenPlaces = true; a.body.stops.forEach((s, i) => { s.mustVisit = true; s.durationSource = 'user'; s.durationMinutes = 40 + i * 5; });
+  const response = await a.post('/api/guide/plan', a.body); expect(response.statusCode, response.body).toBe(200);
+  expect(response.json().itinerary.stops.map((s: { location: SelectedLocation }) => s.location.id).sort()).toEqual(a.candidates.map(c => c.location.id).sort());
+  expect(response.json().itinerary.end.id).toBe(a.body.startId); expect(rankGuide).not.toHaveBeenCalled();
+  const compare = await a.post('/api/guide/compare', a.body); expect(compare.statusCode).toBe(422); expect(compare.json().error.code).toBe('CHOSEN_COMPARISON');
+  a.body.endTime = '09:30'; const failed = await a.post('/api/guide/plan', a.body);
+  expect(failed.statusCode).toBe(422); expect(failed.json().error.code).toBe('GUIDE_INFEASIBLE'); expect(failed.json().error.message).toContain('No visit was silently removed');
+  expect(a.routeCall).toHaveBeenCalledTimes(1);
+});
 it('discovery and final planning strictly use any of the selected interests, with no unrelated fallback', async () => {
   const raw = [
     { ...rawPlace('provider-unrelated-fort'), displayName: { text: 'Popular Fort' }, types: ['tourist_attraction'], rating: 5, userRatingCount: 100000 },
