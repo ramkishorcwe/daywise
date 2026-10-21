@@ -11,7 +11,7 @@ const point = z.object({ day: z.number().int().min(0).max(6).default(0), hour: z
 const hoursSchema = z.object({ periods: z.array(z.object({ open: point, close: point.optional() })).max(30).optional(), weekdayDescriptions: z.array(z.string()).optional() });
 export const guidePlaceSchema = z.object({ id: providerPlaceId, displayName: z.object({ text: z.string().min(1).max(300) }), formattedAddress: z.string().min(1).max(1000), location: coordinateSchema, types: z.array(z.string()), businessStatus: z.string().optional(), priceLevel: z.string().optional(), rating: z.number().optional(), userRatingCount: z.number().int().optional(), currentOpeningHours: hoursSchema.optional(), regularOpeningHours: hoursSchema.optional(), accessibilityOptions: z.object({ wheelchairAccessibleEntrance: z.boolean().optional() }).optional(), goodForChildren: z.boolean().optional(), servesVegetarianFood: z.boolean().optional(), servesLunch: z.boolean().optional(), websiteUri: z.url().optional(), googleMapsUri: z.url().optional(), editorialSummary: z.object({ text: z.string().max(2500) }).optional(), containingPlaces: z.array(z.object({ id: providerPlaceId })).max(10).optional(), attributions: z.array(z.object({ provider: z.string(), providerUri: z.url().optional() })).optional() });
 export type GuidePlace = z.infer<typeof guidePlaceSchema>;
-export interface GuidePlacesProvider { discover(city: string, center: Coordinate, preferences: GuidePreferences): Promise<GuidePlace[]>; facts(placeId: string): Promise<GuidePlace>; nearbyRestaurants?(center: Coordinate, radiusMeters: number): Promise<GuidePlace[]>; photo?(placeId: string, beforeMedia: () => Promise<void>): Promise<PlacePhoto> }
+export interface GuidePlacesProvider { discover(city: string, center: Coordinate, preferences: GuidePreferences, beforeAdditionalSearch?: () => void | Promise<void>): Promise<GuidePlace[]>; facts(placeId: string): Promise<GuidePlace>; nearbyRestaurants?(center: Coordinate, radiusMeters: number): Promise<GuidePlace[]>; photo?(placeId: string, beforeMedia: () => Promise<void>): Promise<PlacePhoto> }
 const fields = ['id', 'displayName', 'formattedAddress', 'location', 'types', 'businessStatus', 'priceLevel', 'rating', 'userRatingCount', 'currentOpeningHours', 'regularOpeningHours', 'accessibilityOptions', 'goodForChildren', 'servesVegetarianFood', 'servesLunch', 'websiteUri', 'googleMapsUri', 'editorialSummary', 'containingPlaces', 'attributions'];
 export class GoogleGuidePlaces implements GuidePlacesProvider {
   constructor(private key: string, private request: typeof fetch = fetch) {}
@@ -35,14 +35,25 @@ export class GoogleGuidePlaces implements GuidePlacesProvider {
     if (!response.ok) throw new ProviderError(response.status === 429 ? 'QUOTA' : 'UNAVAILABLE', 'Google rejected guide discovery. Check Places API (New), billing and the server key restrictions.');
     try { return await response.json(); } catch { throw new ProviderError('INVALID_RESPONSE', 'Google returned unreadable attraction information.'); }
   }
-  async discover(city: string, center: Coordinate, p: GuidePreferences) {
+  async discover(city: string, center: Coordinate, p: GuidePreferences, beforeAdditionalSearch?: () => void | Promise<void>) {
     if (!this.key) throw new ProviderError('NOT_CONFIGURED', 'Configure the Places API (New) server key for discovery.');
-    const interests = p.interests.filter(i => i !== 'hidden_gems').join(', ').replaceAll('_', ' ');
-    const raw = await this.json('https://places.googleapis.com/v1/places:searchText', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': this.key, 'X-Goog-FieldMask': fields.map(f => `places.${f}`).join(',') }, body: JSON.stringify({ textQuery: interests ? `${interests} places to visit in ${city}` : `places to visit in ${city}`, pageSize: 12, languageCode: 'en', locationBias: { circle: { center, radius: 40000 } } }) });
-    const result = z.object({ places: z.array(z.unknown()).max(20).optional() }).safeParse(raw);
-    if (!result.success) throw new ProviderError('INVALID_RESPONSE', 'Google discovery returned invalid results.');
+    const terms = { history: 'historic landmarks', forts: 'forts and castles', palaces: 'palaces', culture: 'cultural attractions', temples: 'temples and places of worship', shopping: 'markets and shopping', nature: 'nature parks and lakes', gardens: 'gardens', museums: 'museums', food: 'restaurants and cafes', nightlife: 'night clubs and bars', hidden_gems: 'lesser known attractions' };
+    const queries = p.interests.length ? [...new Set(p.interests)].map(i => `${terms[i]} in ${city}`) : [`places to visit in ${city}`];
+    const results: GuidePlace[][] = [];
+    // Separate searches prevent a combined museums/food/nightlife query becoming only restaurants.
+    // Three concurrent requests at most; every additional query is counted by the caller's guard.
+    for (let offset = 0; offset < queries.length; offset += 3) {
+      const batch = await Promise.all(queries.slice(offset, offset + 3).map(async (textQuery, i) => {
+        if (offset + i > 0) await beforeAdditionalSearch?.();
+        const raw = await this.json('https://places.googleapis.com/v1/places:searchText', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': this.key, 'X-Goog-FieldMask': fields.map(f => `places.${f}`).join(',') }, body: JSON.stringify({ textQuery, pageSize: 12, languageCode: 'en', locationBias: { circle: { center, radius: 40000 } } }) });
+        const result = z.object({ places: z.array(z.unknown()).max(20).optional() }).safeParse(raw);
+        if (!result.success) throw new ProviderError('INVALID_RESPONSE', 'Google discovery returned invalid results.');
+        return (result.data.places ?? []).flatMap(item => { const parsed = guidePlaceSchema.safeParse(item); return parsed.success && !['CLOSED_PERMANENTLY', 'CLOSED_TEMPORARILY'].includes(parsed.data.businessStatus ?? '') ? [parsed.data] : []; });
+      }));
+      results.push(...batch);
+    }
     const seen = new Set<string>();
-    return (result.data.places ?? []).flatMap(item => { const parsed = guidePlaceSchema.safeParse(item); if (!parsed.success || seen.has(parsed.data.id) || ['CLOSED_PERMANENTLY', 'CLOSED_TEMPORARILY'].includes(parsed.data.businessStatus ?? '')) return []; seen.add(parsed.data.id); return [parsed.data]; });
+    return results.flat().filter(place => { if (seen.has(place.id)) return false; seen.add(place.id); return true; });
   }
   async facts(placeId: string) {
     const raw = await this.json(`https://places.googleapis.com/v1/places/${encodeURIComponent(providerPlaceId.parse(placeId))}?languageCode=en`, { headers: { 'X-Goog-Api-Key': this.key, 'X-Goog-FieldMask': fields.join(',') } });
@@ -92,9 +103,11 @@ export function openingWindows(place: GuidePlace, date: string, timezone: string
   return { status: windows.length ? useCurrent ? 'date_specific' : 'usual' : 'closed', windows: windows.sort((a, b) => a.opens.localeCompare(b.opens)), description: descriptions };
 }
 export function factsFor(place: GuidePlace, date: string, timezone: string): GuideFacts {
-  const text = `${place.types.join(' ')} ${place.displayName.text}`.toLowerCase(), categories: GuideFacts['categories'] = [];
-  const rules: Array<[GuideFacts['categories'][number], RegExp]> = [['forts', /\bfort\b|castle/], ['palaces', /palace/], ['history', /historical|monument|\bfort\b|palace|museum/], ['culture', /tourist_attraction|cultural|heritage/], ['temples', /temple|place_of_worship/], ['shopping', /market|bazaar|shopping/], ['nature', /\bpark\b|natural|lake|wildlife/], ['gardens', /garden|\bpark\b/], ['museums', /museum/], ['food', /restaurant|cafe|food/], ['nightlife', /night_club|\bbar\b/]];
-  for (const [category, pattern] of rules) if (pattern.test(text)) categories.push(category);
+  const types = place.types.join(' ').toLowerCase();
+  const dining = /restaurant|cafe|\bbar\b|night_club/.test(types), landmark = /museum|historical|cultural/.test(types);
+  const text = `${types} ${dining && !landmark ? '' : place.displayName.text}`.toLowerCase(), categories: GuideFacts['categories'] = [];
+  const rules: Array<[GuideFacts['categories'][number], RegExp]> = [['forts', /\bfort\b|castle/], ['palaces', /palace/], ['history', /historical|monument|\bfort\b|castle|palace|museum/], ['culture', /tourist_attraction|cultural|heritage|museum|art_gallery|performing_arts/], ['temples', /temple|place_of_worship/], ['shopping', /market|bazaar|shopping|\bstore\b|_store/], ['nature', /\bpark\b|natural|lake|wildlife|garden/], ['gardens', /garden|\bpark\b/], ['museums', /museum/], ['food', /restaurant|cafe|food/], ['nightlife', /night_club|\bbar\b/]];
+  for (const [category, pattern] of rules) if (category === 'museums' ? place.types.includes('museum') : category === 'nightlife' ? place.types.some(t => t === 'night_club' || t === 'bar' || t.endsWith('_bar')) : pattern.test(text)) categories.push(category);
   const environment = /museum|art_gallery/.test(place.types.join(' ')) ? 'indoor' : /\bpark\b|garden|natural_feature/.test(place.types.join(' ')) ? 'outdoor' : 'unknown';
   return { ...(place.priceLevel ? { priceLevel: place.priceLevel } : {}), mealServices: { lunch: place.servesLunch ?? null }, containingPlaceIds: place.containingPlaces?.map(p => p.id) ?? [], categories, environment, rating: place.rating ?? null, reviews: place.userRatingCount ?? null, hours: openingWindows(place, date, timezone), admission: null, accessible: place.accessibilityOptions?.wheelchairAccessibleEntrance ?? null, goodForChildren: place.goodForChildren ?? null, vegetarianOptions: place.servesVegetarianFood ?? null, website: place.websiteUri ?? null, providerUri: place.googleMapsUri ?? null, description: place.editorialSummary?.text ?? null, checkedAt: new Date().toISOString() };
 }

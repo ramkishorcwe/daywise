@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { guidePreferencesSchema, guidePlanRequestSchema, guideComparisonSchema, guidePlanStyles, type GuideCandidate, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../packages/contracts/src/guide';
+import { guidePreferencesSchema, guidePlanRequestSchema, guideComparisonSchema, guidePlanStyles, interests, type GuideCandidate, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../packages/contracts/src/guide';
 import { locationSchema, type SelectedLocation } from '../packages/contracts/src/locations';
-import { candidateScore, suggestedVisitMinutes, budgetFor, chooseGuideOrder, guideStyleStops, guideResult, guidePreferenceIssue } from '../packages/domain/src/guide-planner';
-import { openingWindows, GoogleGuidePlaces, type GuidePlace } from '../packages/data-adapters/src/google-guide';
+import { candidateScore, suggestedVisitMinutes, budgetFor, chooseGuideOrder, guideStyleStops, guideResult, guidePreferenceIssue, balanceGuideShortlist } from '../packages/domain/src/guide-planner';
+import { openingWindows, factsFor, GoogleGuidePlaces, type GuidePlace } from '../packages/data-adapters/src/google-guide';
 import { GoogleRoutes, ProviderError, type LiveRouteProvider } from '../packages/data-adapters/src/google';
 import { OpenAIInterpreter } from '../packages/data-adapters/src/assistant';
 import { createServer } from '../apps/api/src/server';
@@ -90,12 +90,152 @@ it('deduplicates discovery, excludes permanently closed and unlocated results, a
 it('provider discovery failure is actionable and never returns sample attractions', async () => { await expect(new GoogleGuidePlaces('mock-key', async () => new Response('', { status: 403 })).discover('Provider city', { latitude: 51, longitude: 0 }, preferences())).rejects.toThrow('Google rejected'); });
 it('searches all selected interests without truncating the list or adding default categories', async () => {
   const request = vi.fn<typeof fetch>(async () => Response.json({ places: [] })), p = preferences(); p.interests = ['temples', 'gardens', 'museums', 'food', 'nightlife'];
-  const provider = new GoogleGuidePlaces('mock-key', request); await provider.discover('Provider city', { latitude: 51, longitude: 0 }, p);
-  const query = JSON.parse(request.mock.calls[0][1]!.body as string).textQuery;
-  for (const interest of p.interests) expect(query).toContain(interest);
-  expect(query).not.toContain('famous landmarks');
+  const additional = vi.fn(), provider = new GoogleGuidePlaces('mock-key', request); await provider.discover('Provider city', { latitude: 51, longitude: 0 }, p, additional);
+  const queries = request.mock.calls.map(call => JSON.parse(call[1]!.body as string).textQuery as string);
+  expect(queries).toHaveLength(5); expect(additional).toHaveBeenCalledTimes(4);
+  for (const term of ['temples', 'gardens', 'museums', 'restaurants', 'night clubs']) expect(queries.some(query => query.includes(term))).toBe(true);
+  expect(queries.every(query => query.includes('Provider city') && !query.includes('famous landmarks'))).toBe(true);
   p.interests = []; await provider.discover('Provider city', { latitude: 51, longitude: 0 }, p);
-  expect(JSON.parse(request.mock.calls[1][1]!.body as string).textQuery).toBe('places to visit in Provider city');
+  expect(JSON.parse(request.mock.calls[5][1]!.body as string).textQuery).toBe('places to visit in Provider city');
+});
+
+it('balances the shortlist so popular restaurants cannot crowd out a requested museum or nightlife venue', () => {
+  const food = Array.from({ length: 12 }, (_, i) => candidate(i + 10, ['food'])), museum = candidate(1, ['museums']), night = candidate(2, ['nightlife']);
+  const p = preferences(); p.interests = ['museums', 'food', 'nightlife'];
+  const shortlist = balanceGuideShortlist([...food, museum, night], p);
+  expect(shortlist).toHaveLength(8); expect(shortlist).toContain(museum); expect(shortlist).toContain(night);
+  expect(shortlist.slice(0, 3).flatMap(c => c.facts.categories)).toEqual(expect.arrayContaining(p.interests));
+});
+
+it('does not classify a Museum Cafe or Fort Bar as an actual museum or fort from its name', () => {
+  const raw = { ...rawPlace('provider-named-cafe'), displayName: { text: 'Museum Fort Garden Cafe' }, types: ['cafe', 'restaurant', 'tourist_attraction'] };
+  const facts = factsFor(raw, date, 'UTC');
+  expect(facts.categories).toContain('food'); expect(facts.categories).not.toContain('museums'); expect(facts.categories).not.toContain('forts'); expect(facts.categories).not.toContain('gardens');
+  expect(factsFor({ ...raw, types: ['museum', 'cafe'] }, date, 'UTC').categories).toContain('museums');
+});
+
+it.each(interests)('strictly honors the selected %s interest without substituting an unrelated attraction', interest => {
+  const match = candidate(1, interest === 'hidden_gems' ? ['nature'] : [interest]), other = candidate(2, interest === 'museums' ? ['food'] : ['museums']);
+  const body = input([match, other]); body.preferences.interests = [interest]; body.endTime = '21:00';
+  if (interest === 'hidden_gems') other.facts.reviews = 5000;
+  const selected = chooseGuideOrder(body, location(), [match, other], matrix(2));
+  expect(selected.order.map(s => s.locationId)).toEqual([match.location.id]);
+  expect(selected.coverage).toBe(1);
+  if (interest === 'nightlife') expect(selected.schedule.rows[0].arrival).toBeGreaterThanOrEqual(zonedTime(date, '18:00', 'UTC'));
+});
+
+it('maximizes feasible category coverage before extra visits, popularity or travel savings for every style', () => {
+  const cs = [candidate(1, ['museums']), candidate(2, ['museums']), candidate(3, ['museums']), candidate(4, ['food']), candidate(5, ['nightlife'])];
+  const body = input(cs); body.preferences.interests = ['museums', 'food', 'nightlife']; body.endTime = '21:00';
+  cs[0].facts.rating = 5; cs[1].facts.rating = 5; cs[2].facts.rating = 5;
+  const m = matrix(5); m[0][5] = { durationSeconds: 1800, distanceMeters: 2000 };
+  for (const style of [undefined, ...guidePlanStyles]) {
+    const selected = chooseGuideOrder(body, location(), cs, m, [], Date.now(), new Set(), 5, style);
+    expect(selected.coverage).toBe(3);
+    expect(selected.order.some(s => s.locationId === cs[3].location.id)).toBe(true);
+    expect(selected.order.some(s => s.locationId === cs[4].location.id)).toBe(true);
+  }
+});
+
+it('relaxed planning can exceed three stops when necessary to fulfill feasible selected interests', () => {
+  const cs = [candidate(1, ['museums']), candidate(2, ['temples']), candidate(3, ['gardens']), candidate(4, ['shopping'])], body = input(cs);
+  body.preferences.interests = ['museums', 'temples', 'gardens', 'shopping'];
+  const selected = chooseGuideOrder(body, location(), cs, matrix(4), [], Date.now(), new Set(), 5, 'relaxed');
+  expect(selected.coverage).toBe(4); expect(selected.order).toHaveLength(4);
+});
+
+it('a short daytime trip covers feasible interests without pretending it includes nightlife', () => {
+  const cs = [candidate(1, ['museums']), candidate(2, ['food']), candidate(3, ['nightlife'])], body = input(cs);
+  body.preferences.interests = ['museums', 'food', 'nightlife']; body.endTime = '11:00';
+  const selected = chooseGuideOrder(body, location(), cs, matrix(3));
+  expect(selected.coverage).toBe(2); expect(selected.order.some(s => s.locationId === cs[2].location.id)).toBe(false);
+  body.stops = [choice(cs[2])]; expect(() => chooseGuideOrder(body, location(), cs, matrix(3))).toThrow('No feasible');
+});
+
+it('nightlife timing uses the destination timezone rather than the server clock', () => {
+  const cs = [candidate(1, ['nightlife'])], body = input(cs), destination = location();
+  destination.timezone = 'Asia/Kolkata'; body.preferences.interests = ['nightlife']; body.endTime = '21:00';
+  cs[0].facts.hours.windows = [{ opens: `${date}T12:30:00Z`, closes: `${date}T16:30:00Z` }];
+  const selected = chooseGuideOrder(body, destination, cs, matrix(1));
+  expect(selected.coverage).toBe(1); expect(selected.schedule.rows[0].arrival).toBe(Date.parse(`${date}T12:30:00Z`));
+});
+
+it('coverage never overrides confirmed dietary, environment, wheelchair or budget conflicts', () => {
+  const cs = [candidate(1, ['museums']), candidate(2, ['food']), candidate(3, ['gardens'])], body = input(cs);
+  body.preferences.interests = ['museums', 'food', 'gardens']; body.preferences.dietaryRules = ['vegan'];
+  cs[1].facts.vegetarianOptions = false; cs[0].facts.accessible = true; cs[2].facts.accessible = false;
+  body.preferences.mobility = 'wheelchair';
+  const selected = chooseGuideOrder(body, location(), cs, matrix(3));
+  expect(selected.coverage).toBe(1); expect(selected.order.map(s => s.locationId)).toEqual([cs[0].location.id]);
+  body.preferences.mobility = 'standard'; body.preferences.groupBudget = 50;
+  cs[0].facts.admission = { minimum: 100, maximum: 100, currency: 'USD', basis: 'group', source: 'user_estimate', sourceUrl: null };
+  expect(chooseGuideOrder(body, location(), cs, matrix(3)).order.map(s => s.locationId)).toEqual([cs[2].location.id]);
+  body.preferences.environment = 'indoor'; cs[2].facts.environment = 'outdoor';
+  expect(() => chooseGuideOrder(body, location(), cs, matrix(3))).toThrow('No feasible');
+});
+
+it('per-interest provider searches deduplicate places and account for every extra query with bounded concurrency', async () => {
+  let active = 0, peak = 0;
+  const request = vi.fn<typeof fetch>(async () => { active++; peak = Math.max(active, peak); await new Promise(resolve => setTimeout(resolve, 5)); active--; return Response.json({ places: [rawPlace('provider-overlapping-result')] }); });
+  const p = preferences(); p.interests = [...interests]; const extra = vi.fn();
+  const places = await new GoogleGuidePlaces('mock-key', request).discover('Provider city', { latitude: 51, longitude: 0 }, p, extra);
+  expect(request).toHaveBeenCalledTimes(12); expect(extra).toHaveBeenCalledTimes(11); expect(peak).toBeLessThanOrEqual(3); expect(places).toHaveLength(1);
+});
+
+it('recognizes provider-backed cultural and shopping categories without relying on an attraction name', () => {
+  expect(factsFor({ ...rawPlace('provider-cultural-museum'), displayName: { text: 'Provider venue' }, types: ['museum'] }, date, 'UTC').categories).toEqual(expect.arrayContaining(['museums', 'culture', 'history']));
+  expect(factsFor({ ...rawPlace('provider-retail'), displayName: { text: 'Provider venue' }, types: ['clothing_store'] }, date, 'UTC').categories).toContain('shopping');
+});
+
+async function preferenceCoverageApi(museumClosed = false) {
+  const raw = [
+    ...Array.from({ length: 10 }, (_, i) => ({ ...rawPlace(`provider-food-${i}`), displayName: { text: `Provider restaurant ${i}` }, types: ['restaurant'], rating: 5, userRatingCount: 10000, location: { latitude: 51.01 + i / 1000, longitude: 0 } })),
+    { ...rawPlace('provider-requested-museum'), displayName: { text: 'Provider requested museum' }, rating: 3, location: { latitude: 51.03, longitude: 0 }, ...(museumClosed ? { currentOpeningHours: { periods: [] } } : {}) },
+    { ...rawPlace('provider-requested-club'), displayName: { text: 'Provider requested club' }, types: ['night_club'], location: { latitude: 51.04, longitude: 0 } },
+  ];
+  raw.at(-1)!.currentOpeningHours!.periods![0].open.hour = 18; raw.at(-1)!.currentOpeningHours!.periods![0].close!.hour = 23;
+  const rankGuide = vi.fn(async (context: import('../packages/data-adapters/src/assistant').GuideAIContext) => {
+    const food = context.candidates.filter(c => c.categories.includes('food')).slice(0, 2);
+    return { rankedIds: food.map(c => c.id), interests: ['food' as const], visits: food.map(c => ({ locationId: c.id, durationMinutes: 45, timeBand: 'any' as const })) };
+  });
+  const p = preferences(); p.interests = ['museums', 'food', 'nightlife'];
+  const a = await api({ guide: { discover: async () => raw, facts: async id => raw.find(r => r.id === id)! }, interpreter: { mode: 'gemini', rankGuide, interpret: async () => ({ intent: 'summary', minutes: null, pace: null, placeId: null }) } }, p);
+  a.body.endTime = '21:00'; a.body.stops.forEach(s => s.durationSource = 'category_estimate');
+  return { ...a, rankGuide };
+}
+
+it('discovers every requested category and repairs AI omission of a feasible museum and nightlife venue', async () => {
+  const a = await preferenceCoverageApi();
+  expect(a.candidates).toHaveLength(8);
+  expect(a.candidates.some(c => c.facts.categories.includes('museums'))).toBe(true);
+  expect(a.candidates.some(c => c.facts.categories.includes('nightlife'))).toBe(true);
+  const response = await a.post('/api/guide/plan', a.body); expect(response.statusCode, response.body).toBe(200);
+  const plan = response.json();
+  expect(plan.interestCoverage.map((row: { status: string }) => row.status)).toEqual(['included', 'included', 'included']);
+  expect(plan.itinerary.stops.some((s: { location: SelectedLocation }) => s.location.placeId === 'provider-requested-museum')).toBe(true);
+  const club = plan.itinerary.stops.find((s: { location: SelectedLocation }) => s.location.placeId === 'provider-requested-club');
+  expect(Date.parse(club.arrivalAt)).toBeGreaterThanOrEqual(zonedTime(date, '18:00', 'UTC'));
+  expect(a.rankGuide).toHaveBeenCalledTimes(1); expect(a.matrixCall.mock.calls[0][0]).toHaveLength(10);
+});
+
+it('every ready comparison style prioritizes all feasible requested interests over its own route/pace preference', async () => {
+  const a = await preferenceCoverageApi(); const response = await a.post('/api/guide/compare', a.body);
+  expect(response.statusCode, response.body).toBe(200);
+  const options = guideComparisonSchema.parse(response.json()).options;
+  expect(options.every(o => o.status === 'ready' || o.code === 'NO_DISTINCT_PLAN')).toBe(true);
+  expect(options.filter(o => o.status === 'ready').length).toBeGreaterThan(0);
+  for (const option of options) if (option.status === 'ready') expect(option.plan.interestCoverage?.every(row => row.status === 'included')).toBe(true);
+  expect(a.rankGuide).toHaveBeenCalledTimes(1);
+});
+
+it('explains missing museum evidence and an impossible daytime nightlife request instead of silently substituting', async () => {
+  const a = await preferenceCoverageApi(true); a.body.endTime = '12:00';
+  expect(a.discovery.json().warnings.join(' ')).toContain('museums');
+  const response = await a.post('/api/guide/plan', a.body); expect(response.statusCode, response.body).toBe(200);
+  const coverage = response.json().interestCoverage;
+  expect(coverage.find((row: { interest: string }) => row.interest === 'museums')).toMatchObject({ status: 'not_scheduled', reason: expect.stringContaining('No open, provider-verified match') });
+  expect(coverage.find((row: { interest: string }) => row.interest === 'nightlife')).toMatchObject({ status: 'not_scheduled', reason: expect.stringContaining('18:00') });
+  expect(coverage.find((row: { interest: string }) => row.interest === 'food').status).toBe('included');
 });
 it('matrix handles omitted protobuf zero indices and unavailable edges without fictitious travel', async () => { const request = vi.fn<typeof fetch>(async () => Response.json([{ condition: 'ROUTE_EXISTS', duration: '0s', status: {} }, { destinationIndex: 1, condition: 'ROUTE_NOT_FOUND', status: { code: 5 } }])); const result = await new GoogleRoutes('mock-key', request).matrix([{ latitude: 51, longitude: 0 }, { latitude: 52, longitude: 0 }], new Date().toISOString(), 'WALK'); expect(result[0][0]).toEqual({ durationSeconds: 0, distanceMeters: 0 }); expect(result[0][1]).toBeNull(); const body = JSON.parse(request.mock.calls[0][1]!.body as string); expect(body.travelMode).toBe('WALK'); expect(body.departureTime).toBeUndefined(); });
 it('AI ranks only supplied IDs, rejects hallucinated IDs, and never receives GPS coordinates', async () => { const cs = [candidate(1), candidate(2)], context = { preferences: preferences(), candidates: cs.map(c => ({ id: c.location.id, name: c.location.name, categories: c.facts.categories, rating: c.facts.rating, reviews: c.facts.reviews })) }; const request = vi.fn<typeof fetch>(async () => Response.json({ status: 'completed', output: [{ type: 'function_call', name: 'rank_verified_candidates', arguments: JSON.stringify({ rankedIds: [randomUUID()], interests: ['history'] }) }] })); await expect(new OpenAIInterpreter('mock-key', 'configured-model', request).rankGuide(context)).rejects.toThrow('unverified'); expect(JSON.parse(request.mock.calls[0][1]!.body as string).store).toBe(false); expect(request.mock.calls[0][1]!.body).not.toContain('latitude'); });

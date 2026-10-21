@@ -2,14 +2,15 @@ import type { GuideComparison as Comparison, GuidePlanStyle } from '../../../../
 import { formatTime } from '../../../../packages/domain/src/time-format';
 import { priceRange } from '../trip-price';
 import './guide-comparison.css';
+import InterestCoverage from './InterestCoverage';
 
 export const planStyleLabels: Record<GuidePlanStyle, string> = {
   sightseeing: 'More sightseeing', less_travel: 'Less travelling', relaxed: 'Relaxed day',
 };
 const descriptions: Record<GuidePlanStyle, string> = {
-  sightseeing: 'Prioritizes more matching visits within your limits.',
-  less_travel: 'Prioritizes less travel, aiming for at least two visits when feasible.',
-  relaxed: 'Adds 25% more time to estimated visits, with up to three stops unless required visits need more. Your edited durations stay fixed.',
+  sightseeing: 'Covers feasible selected interests first, then prioritizes more matching visits.',
+  less_travel: 'Covers feasible selected interests first, then prioritizes less travel.',
+  relaxed: 'Adds 25% more time to estimated visits and favors fewer optional stops. Selected interests and your edited durations stay in effect.',
 };
 export default function GuideComparison({ comparison, selected, onSelect }: { comparison: Comparison; selected: GuidePlanStyle | null; onSelect: (style: GuidePlanStyle) => void }) {
   const count = comparison.options.filter(option => option.status === 'ready' && !option.sameAs).length;
@@ -30,6 +31,7 @@ export default function GuideComparison({ comparison, selected, onSelect }: { co
             <div><dt>Return</dt><dd>{formatTime(Date.parse(t.finishAt), t.destination.timezone!)} · {spare} min before deadline</dd></div>
             <div><dt>{partial ? 'Known group subtotal' : 'Group estimate'}</dt><dd>{b.currency && (!partial || b.groupKnownMaximum > 0) ? priceRange(b.groupKnownMinimum, b.groupKnownMaximum, b.currency) : 'Not fully priced'}</dd></div></dl>
           {partial && <p className="field-note">Partial estimate; unpriced or unverified costs remain.</p>}
+          <InterestCoverage plan={plan} compact />
           <p className="guide-comparison-places">{visits.map(s => s.location.name).join(' → ')}</p>
           <button type="button" className={`button ${selected === option.style ? 'primary' : 'secondary'}`} aria-pressed={selected === option.style} onClick={() => onSelect(option.style)}>{selected === option.style ? `Reviewing ${planStyleLabels[option.style]}` : `Review ${planStyleLabels[option.style]}`}</button>
         </>;

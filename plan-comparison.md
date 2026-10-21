@@ -4,6 +4,8 @@ Select a destination, starting point, times and preferences, then press **Compar
 
 The comparison uses the same verified attraction shortlist, one shared Google travel matrix and at most one configured AI ranking. The deterministic scheduler evaluates three priorities:
 
+All styles first maximize feasible selected-interest coverage as described in [preference-coverage.md](preference-coverage.md). Their style-specific priorities below break ties between equally covered plans. Relaxed day can exceed its usual three visits if necessary to cover more selected interests within the existing five-visit limit.
+
 | Style | Priority |
 | --- | --- |
 | More sightseeing | Maximize the number of feasible matching attractions, up to the existing five-visit limit, then use the existing quality score. |

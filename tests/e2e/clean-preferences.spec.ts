@@ -13,7 +13,7 @@ for (const width of [390, 1440]) test(`clean initial preferences keep multiple s
   for (const name of ['temples', 'gardens', 'museums', 'food']) await interests.getByRole('button', { name, exact: true }).click();
   await page.getByRole('combobox', { name: 'Indoor or outdoor', exact: true }).selectOption('indoor');
   await page.waitForTimeout(1200); expect(state.inputs).toHaveLength(0);
-  await help.getByText('Planning help', { exact: true }).click(); await expect(help).toContainText('Each visit must match at least one selected interest');
+  await help.getByText('Planning help', { exact: true }).click(); await expect(help).toContainText('Each visit must match a selected interest'); await expect(help).toContainText('prioritizes covering all selected interests when feasible');
   await help.getByText('Planning help', { exact: true }).click();
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible();

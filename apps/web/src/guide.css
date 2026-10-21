@@ -51,3 +51,8 @@
 
 .stop-price { padding: .65rem .85rem; background: #f5f7ef; border-left: 3px solid #647345; border-radius: .5rem; margin: .75rem 0; }
 .stop-price p { margin: .3rem 0; }
+.guide-interest-coverage { margin: 16px 0; padding: 13px 15px; border: 1px solid #dce5d3; border-radius: 10px; background: #f4f7ee; font-size: 13px; overflow-wrap: anywhere; }
+.guide-interest-coverage p { margin: 4px 0; }
+.guide-interest-coverage ul { margin: 8px 0 0; padding-left: 18px; }
+.guide-interest-coverage li { margin: 6px 0; }
+.guide-interest-coverage.is-compact { padding: 9px; font-size: 11px; }
