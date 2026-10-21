@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { mealKinds, guideDiscoverSchema, guideCandidateRequestSchema, guidePlanRequestSchema, candidateSchema, guideDiscoverySchema, guidePlanSchema, guideRankingSchema, guideComparisonSchema, guidePlanStyles, type GuideComparison, type GuidePlanStyle, type GuideCandidate, type GuidePreferences, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../../../packages/contracts/src/guide';
 import { startMatchesDestination, type SelectedLocation, type LiveRoute } from '../../../packages/contracts/src/locations';
-import { candidateScore, suggestedVisitMinutes, chooseGuideOrder, guideResult, middayMealDue, middayMealRequested, scheduleGuide, guidePreferenceIssue } from '../../../packages/domain/src/guide-planner';
+import { candidateScore, suggestedVisitMinutes, chooseGuideOrder, guideStyleStops, guideResult, middayMealDue, middayMealRequested, scheduleGuide, guidePreferenceIssue } from '../../../packages/domain/src/guide-planner';
 import { liveDeparture } from '../../../packages/domain/src/live-itinerary';
 import { factsFor, type GuidePlacesProvider, type GuidePlace } from '../../../packages/data-adapters/src/google-guide';
 import type { ServerOptions } from './server';
@@ -168,13 +168,14 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
       if (new Set(result.rankedIds).size !== result.rankedIds.length || new Set(result.visits?.map(v => v.locationId)).size !== (result.visits?.length ?? 0) || suppliedIds.some(id => !candidates.some(c => c.location.id === id))) throw new ApiError(422, 'AI_UNKNOWN_CANDIDATE', 'AI referenced an unverified place. Your itinerary was not changed.');
       ranking = result.rankedIds; mode = interpreter.mode;
       if (mode === 'gemini' && !result.visits?.length) throw new ApiError(422, 'AI_NO_SUITABLE_VISITS', 'Gemini did not recommend suitable verified visits. Adjust preferences or turn AI planning off.');
-      if (mode === 'gemini') body.stops = body.stops.filter(stop => stop.mustVisit || stop.locked || result.visits?.some(v => v.locationId === stop.locationId)).map(stop => { const decision = result.visits?.find(v => v.locationId === stop.locationId); return decision && stop.durationSource !== 'user' ? { ...stop, durationMinutes: decision.durationMinutes, durationSource: 'gemini_estimate', timeBand: decision.timeBand } : stop; });
+      if (mode === 'gemini') body.stops = body.stops.filter(stop => stop.mustVisit || stop.locked || result.visits?.some(v => v.locationId === stop.locationId)).map(stop => { const decision = result.visits?.find(v => v.locationId === stop.locationId); return decision && stop.durationSource !== 'user' ? { ...stop, durationMinutes: decision.durationMinutes, durationSource: 'gemini_estimate', baseDurationMinutes: undefined, timeBand: decision.timeBand } : stop; });
     }
     // All styles use one AI ranking and the same verified candidate/matrix snapshot.
     if (compare && mode === 'gemini') body.stops = originalChoices.filter(s => s.mustVisit || s.locked || ranking.includes(s.locationId)).map(s => body.stops.find(chosen => chosen.locationId === s.locationId) ?? s);
     const preparedBody = structuredClone(body), sharedMatrix = structuredClone(matrix);
     async function buildPlan(style?: GuidePlanStyle) {
     const body = structuredClone(preparedBody), matrix = structuredClone(sharedMatrix);
+    if (style) body.stops = guideStyleStops(body.stops, style);
     let usedAlternatives = false;
     const banned = new Set<string>(); let maxVisits = 5;
     for (let attempt = 0; attempt < (body.orderMode === 'manual' ? 1 : 2); attempt++) {
@@ -183,6 +184,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
         if (mode === 'gemini' && body.orderMode === 'smart' && !usedAlternatives && originalChoices.some(s => ranking.includes(s.locationId) && !body.stops.some(chosen => chosen.locationId === s.locationId))) {
           usedAlternatives = true;
           body.stops = originalChoices.filter(s => s.mustVisit || s.locked || ranking.includes(s.locationId)).map(s => body.stops.find(chosen => chosen.locationId === s.locationId) ?? s);
+          if (style) body.stops = guideStyleStops(body.stops, style);
           try { selected = chooseGuideOrder(body, destination, candidates, matrix, ranking, Date.now(), banned, maxVisits, style); }
           catch (failure) { throw new ApiError(422, 'GUIDE_INFEASIBLE', failure instanceof Error ? failure.message : 'No affordable feasible day.'); }
         } else throw new ApiError(422, 'GUIDE_INFEASIBLE', error instanceof Error ? error.message : 'No feasible day.');
@@ -194,6 +196,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
       });
       try {
         const result = guideResult(body, destination, start, end, final.candidates, final.order, route, { originalTravelMinutes: selected.originalTravelMinutes, selectedTravelMinutes: route.durationSeconds / 60, evaluatedSequences: selected.evaluated }, mode);
+        if (style === 'relaxed') result.assumptions.push('Relaxed day adds 25% to generated visit allowances, rounded up to five minutes and capped at four hours. User-entered durations stay fixed. Longer visits must still fit opening hours, meals and your return deadline.');
         if (usedAlternatives) result.itinerary.warnings.push('Selected ranked alternative attractions because the first AI shortlist did not fit the time or budget.');
         const detours = validateMealDetours(final.order, final.candidates, final.matrix, body, route);
         result.stops.forEach((stop, i) => { if (detours[i]) { stop.mealDetour = detours[i]; stop.reasons.push(stop.facts.mealServices?.[stop.mealKind!] === true ? `Google reports ${stop.mealKind} service; confirm current availability.` : `${stop.mealKind} service is unverified; check directly with the restaurant.`, i === 0 ? 'Selected near your actual starting location before the first visit; onward travel and meal timing were checked.' : 'Selected near the preceding visit, with the onward route and meal timing checked.', 'Food preparation and meal prices remain unverified; confirm directly with the restaurant.'); } });
@@ -212,8 +215,9 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
       try {
         const plan = await buildPlan(style);
         const signature = JSON.stringify({ stops: plan.itinerary.stops.map(s => [s.location.placeId ?? s.location.id, s.durationMinutes, s.arrivalAt, s.departureAt]), finish: plan.itinerary.finishAt });
-        const sameAs = signatures.get(signature); if (!sameAs) signatures.set(signature, style);
-        comparison.options.push({ style, status: 'ready', plan, ...(sameAs ? { sameAs } : {}) });
+        const sameAs = signatures.get(signature);
+        if (sameAs) comparison.options.push({ style, status: 'unavailable', code: 'NO_DISTINCT_PLAN', reason: 'This style selected the same itinerary as another option. No separate alternative is shown; your fixed visits, times and preferences stay in effect.' });
+        else { signatures.set(signature, style); comparison.options.push({ style, status: 'ready', plan }); }
       } catch (error) {
         if (error instanceof ProviderError) {
           providerFailure = new ApiError(error.code === 'QUOTA' ? 429 : 502, `PROVIDER_${error.code}`, error.message);

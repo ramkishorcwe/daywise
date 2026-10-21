@@ -2,8 +2,8 @@ import { expect, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { guidePreferencesSchema, guidePlanStyles } from '../../../packages/contracts/src/guide';
 import { pricedCandidate, groupCost } from '../../../packages/domain/src/travel-pricing';
-import { budgetFor } from '../../../packages/domain/src/guide-planner';
-import type { GuideCandidate, GuidePlan, GuidePlanRequest, GuideStop } from '../../../packages/contracts/src/guide';
+import { budgetFor, guideStyleStops } from '../../../packages/domain/src/guide-planner';
+import type { GuideCandidate, GuidePlan, GuidePlanRequest, GuideStop, GuideComparison } from '../../../packages/contracts/src/guide';
 import type { SelectedLocation } from '../../../packages/contracts/src/locations';
 const date = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 const identity = { placeId: 'provider-city-id', name: 'Provider city', countryCode: 'GB' };
@@ -34,7 +34,7 @@ export async function setup(page: Page, withMeals = false, withPrices = false, f
     const destination = places.get(body.destinationId)!, start = places.get(body.startId)!, departure = Date.parse(`${body.date}T${body.startTime}:00Z`);
     let cursor = departure;
     const stops = rows.map(row => { cursor += 20 * 60000; if (row.mealKind === 'lunch') cursor = Math.max(cursor, Date.parse(`${body.date}T${body.preferences.meals!.lunch.startTime}:00Z`)); const arrivalAt = new Date(cursor).toISOString(); cursor += row.durationMinutes * 60000; return { location: places.get(row.locationId)!, durationMinutes: row.durationMinutes, arrivalAt, departureAt: new Date(cursor).toISOString() }; });
-    const plan: GuidePlan = { orderMode: body.orderMode, assistantMode: 'local', itinerary: { destination, start, end: body.returnToStart ? start : places.get(body.endId!)!, stops, route: { provider: 'google_routes', mode: body.preferences.travelMode, durationSeconds: (rows.length + 1) * 600, distanceMeters: (rows.length + 1) * 3000, encodedPolyline: 'test-only-route', departureTime: new Date(departure).toISOString(), fetchedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300000).toISOString(), trafficBasis: 'prediction_for_departure', persistence: 'memory_only', legs: Array.from({ length: rows.length + 1 }, () => ({ durationSeconds: 600, distanceMeters: 3000 })), optimizedOrder: rows.map((_row, i) => i) }, finishAt: new Date(cursor + 600000).toISOString(), deadlineAt: `${body.date}T${body.endTime}:00Z`, withinTime: true, warnings: ['Confirm unverified venue facts.'] }, stops: rows.map(row => ({ locationId: row.locationId, ...(row.mealKind ? { mealKind: row.mealKind, mealDetour: { extraMinutes: 2, extraMeters: 500, fromPreviousMeters: 600 } } : {}), facts: [...bank, ...foodBank].find(c => c.location.id === row.locationId)!.facts, cost: null, reasons: ['Selected from verified IDs.'], bufferMinutes: 10, travelMinutes: 10, waitingMinutes: 0, hoursStatus: 'unknown' })), budget: { currency: body.preferences.currency, groupKnownMinimum: 0, groupKnownMaximum: 0, perPersonKnownMinimum: 0, perPersonKnownMaximum: 0, groupLimit: body.preferences.groupBudget, unknowns: ['Admission unknown; not free.'], status: 'unknown' }, assumptions: ['Durations are estimates.'], excluded: [], breaks: [], comparison: { evaluatedSequences: body.orderMode === 'smart' ? 4 : 1, originalTravelMinutes: 60, selectedTravelMinutes: 30 } };
+    const plan: GuidePlan = { orderMode: body.orderMode, assistantMode: 'local', itinerary: { destination, start, end: body.returnToStart ? start : places.get(body.endId!)!, stops, route: { provider: 'google_routes', mode: body.preferences.travelMode, durationSeconds: (rows.length + 1) * 600, distanceMeters: (rows.length + 1) * 3000, encodedPolyline: 'test-only-route', departureTime: new Date(departure).toISOString(), fetchedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300000).toISOString(), trafficBasis: 'prediction_for_departure', persistence: 'memory_only', legs: Array.from({ length: rows.length + 1 }, () => ({ durationSeconds: 600, distanceMeters: 3000 })), optimizedOrder: rows.map((_row, i) => i) }, finishAt: new Date(cursor + 600000).toISOString(), deadlineAt: `${body.date}T${body.endTime}:00Z`, withinTime: true, warnings: ['Confirm unverified venue facts.'] }, stops: rows.map(row => ({ locationId: row.locationId, ...(row.mealKind ? { mealKind: row.mealKind, mealDetour: { extraMinutes: 2, extraMeters: 500, fromPreviousMeters: 600 } } : {}), durationSource: row.durationSource, baseDurationMinutes: row.baseDurationMinutes, facts: [...bank, ...foodBank].find(c => c.location.id === row.locationId)!.facts, cost: null, reasons: ['Selected from verified IDs.'], bufferMinutes: 10, travelMinutes: 10, waitingMinutes: 0, hoursStatus: 'unknown' })), budget: { currency: body.preferences.currency, groupKnownMinimum: 0, groupKnownMaximum: 0, perPersonKnownMinimum: 0, perPersonKnownMaximum: 0, groupLimit: body.preferences.groupBudget, unknowns: ['Admission unknown; not free.'], status: 'unknown' }, assumptions: ['Durations are estimates.'], excluded: [], breaks: [], comparison: { evaluatedSequences: body.orderMode === 'smart' ? 4 : 1, originalTravelMinutes: 60, selectedTravelMinutes: 30 } };
     if (withPrices) {
       const p = guidePreferencesSchema.parse(body.preferences), priced = await Promise.all([...bank, ...foodBank].map(c => pricedCandidate(c, p, rates)));
       plan.budget = budgetFor(rows, priced, p, plan.itinerary.route.distanceMeters);
@@ -49,7 +49,13 @@ export async function setup(page: Page, withMeals = false, withPrices = false, f
   const comparisons: GuidePlanRequest[] = [];
   await page.route('**/api/guide/compare', async r => {
     const body = r.request().postDataJSON() as GuidePlanRequest; comparisons.push(body);
-    const options = await Promise.all(guidePlanStyles.map(async style => ({ style, status: 'ready' as const, plan: await buildPlan({ ...body, stops: style === 'sightseeing' ? body.stops : body.stops.slice(0, 1) }), ...(style === 'relaxed' ? { sameAs: 'less_travel' as const } : {}) })));
+    const options: GuideComparison['options'] = [], seen = new Set<string>();
+    for (const style of guidePlanStyles) {
+      const plan = await buildPlan({ ...body, stops: guideStyleStops(style === 'sightseeing' ? body.stops : body.stops.slice(0, 1), style) });
+      const signature = JSON.stringify(plan.itinerary.stops.map(s => [s.location.id, s.durationMinutes]));
+      if (seen.has(signature)) options.push({ style, status: 'unavailable', code: 'NO_DISTINCT_PLAN', reason: 'No separate alternative: your fixed visits and times select the same itinerary.' });
+      else { seen.add(signature); options.push({ style, status: 'ready', plan }); }
+    }
     await r.fulfill({ json: { options } });
   });
   await page.goto('/?live=1');

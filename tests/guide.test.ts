@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { guidePreferencesSchema, guidePlanRequestSchema, guideComparisonSchema, guidePlanStyles, type GuideCandidate, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../packages/contracts/src/guide';
 import { locationSchema, type SelectedLocation } from '../packages/contracts/src/locations';
-import { candidateScore, suggestedVisitMinutes, budgetFor, chooseGuideOrder, guideResult, guidePreferenceIssue } from '../packages/domain/src/guide-planner';
+import { candidateScore, suggestedVisitMinutes, budgetFor, chooseGuideOrder, guideStyleStops, guideResult, guidePreferenceIssue } from '../packages/domain/src/guide-planner';
 import { openingWindows, GoogleGuidePlaces, type GuidePlace } from '../packages/data-adapters/src/google-guide';
 import { GoogleRoutes, ProviderError, type LiveRouteProvider } from '../packages/data-adapters/src/google';
 import { OpenAIInterpreter } from '../packages/data-adapters/src/assistant';
@@ -169,7 +169,9 @@ it('plans on a new hosted replica with authentic location and guide receipts, an
   expect(result.statusCode).toBe(200); expect(result.json().itinerary.start.id).toBe(destination.id);
   const compared = await second.inject({ method: 'POST', url: '/api/guide/compare', headers: { authorization: `Bearer ${first.token}`, 'idempotency-key': randomUUID() }, payload });
   expect(compared.statusCode, compared.body).toBe(200);
-  expect(guideComparisonSchema.parse(compared.json()).options.every(o => o.status === 'ready' && o.plan.itinerary.start.id === destination.id)).toBe(true);
+  const options = guideComparisonSchema.parse(compared.json()).options;
+  expect(options.some(o => o.status === 'ready')).toBe(true);
+  expect(options.every(o => o.status === 'ready' ? o.plan.itinerary.start.id === destination.id : o.code === 'NO_DISTINCT_PLAN')).toBe(true);
   const forged = structuredClone(payload); forged._evidence.guides[0] = 'A'.repeat(60);
   const invalid = await second.inject({ method: 'POST', url: '/api/guide/plan', headers: { authorization: `Bearer ${first.token}`, 'idempotency-key': randomUUID() }, payload: forged });
   expect(invalid.statusCode).toBe(409); expect(invalid.json().error.code).toBe('EVIDENCE_UNAVAILABLE');
@@ -338,6 +340,31 @@ it('comparison styles make different trade-offs without changing visit allowance
   expect(body).toEqual(original); expect(chooseGuideOrder(body, location(), cs, m).order).toHaveLength(5);
 });
 
+it('relaxed style extends generated allowances once, caps them, and preserves user and legacy durations', () => {
+  const rows: GuideStop[] = [
+    { ...choice(candidate(1)), durationMinutes: 90, durationSource: 'category_estimate' },
+    { ...choice(candidate(2)), durationMinutes: 60, durationSource: 'gemini_estimate' },
+    { ...choice(candidate(3)), durationMinutes: 75, durationSource: 'user' },
+    { ...choice(candidate(4)), durationMinutes: 240, durationSource: 'category_estimate' },
+    { ...choice(candidate(5)), durationMinutes: 50 },
+  ];
+  const relaxed = guideStyleStops(rows, 'relaxed');
+  expect(relaxed.map(s => s.durationMinutes)).toEqual([115, 75, 75, 240, 50]);
+  expect(guideStyleStops(relaxed, 'relaxed')).toEqual(relaxed);
+  expect(guideStyleStops(relaxed, 'less_travel').map(s => s.durationMinutes)).toEqual(rows.map(s => s.durationMinutes));
+  expect(rows[0].durationMinutes).toBe(90);
+});
+
+it('longer relaxed allowances cannot bypass closing hours or the return deadline', () => {
+  const cs = [candidate(1)], body = input(cs); body.stops[0].durationSource = 'category_estimate'; body.stops[0].mustVisit = true;
+  body.endTime = '09:55';
+  expect(chooseGuideOrder(body, location(), cs, matrix(1)).order).toHaveLength(1);
+  body.stops = guideStyleStops(body.stops, 'relaxed');
+  expect(() => chooseGuideOrder(body, location(), cs, matrix(1), [], Date.now(), new Set(), 5, 'relaxed')).toThrow('No feasible');
+  body.endTime = '18:00'; cs[0].facts.hours.windows[0].closes = `${date}T09:45:00Z`;
+  expect(() => chooseGuideOrder(body, location(), cs, matrix(1), [], Date.now(), new Set(), 5, 'relaxed')).toThrow('No feasible');
+});
+
 it('all comparison styles retain budget, opening, strict interests, locks and required stops', () => {
   const cs = Array.from({ length: 5 }, (_, i) => candidate(i + 1)), body = input(cs);
   body.preferences.groupBudget = 30; body.stops[0].mustVisit = true; body.stops[1].locked = true;
@@ -363,6 +390,7 @@ async function comparisonApi(ai = false) {
   const raw = Array.from({ length: 5 }, (_, i) => ({ ...rawPlace(`provider-comparison-${i}`), displayName: { text: `Comparison museum ${i}` }, location: { latitude: 51.01 + i / 100, longitude: 0 } }));
   const rankGuide = vi.fn(async (context: import('../packages/data-adapters/src/assistant').GuideAIContext) => ({ rankedIds: context.candidates.map(c => c.id), interests: ['history' as const], visits: context.candidates.map(c => ({ locationId: c.id, durationMinutes: 30, timeBand: 'any' as const })) }));
   const a = await api({ guide: { discover: async () => raw, facts: async id => raw.find(r => r.id === id)! }, ...(ai ? { interpreter: { mode: 'gemini' as const, rankGuide, interpret: async () => ({ intent: 'summary' as const, minutes: null, pace: null, placeId: null }) } } : {}) });
+  a.body.stops.forEach(s => s.durationSource = 'category_estimate');
   return { ...a, rankGuide };
 }
 
@@ -376,7 +404,12 @@ it('comparison uses one matrix and AI call, real final routes and honest duplica
   expect(comparison.options[0].plan.itinerary.stops).toHaveLength(5);
   expect(comparison.options[1].plan.itinerary.stops).toHaveLength(2);
   expect(comparison.options.every(o => o.status === 'ready' && o.plan.budget.status === 'unknown' && o.plan.budget.unknowns.length > 0)).toBe(true);
-  expect(comparison.options[2]).toMatchObject({ status: 'ready', sameAs: 'less_travel' });
+  const relaxed = comparison.options[2]; expect(relaxed.status).toBe('ready');
+  if (relaxed.status === 'ready') {
+    expect(relaxed.plan.itinerary.stops.every(s => s.durationMinutes === 40)).toBe(true);
+    expect(relaxed.plan.itinerary.finishAt).not.toBe(comparison.options[1].plan.itinerary.finishAt);
+    expect(relaxed.plan.stops.every(s => s.baseDurationMinutes === 30)).toBe(true);
+  }
   expect(a.rankGuide).toHaveBeenCalledTimes(1); expect(a.matrixCall).toHaveBeenCalledTimes(1); expect(a.routeCall).toHaveBeenCalledTimes(2);
   expect((await a.post('/api/guide/compare', a.body, key)).statusCode).toBe(409); expect(a.rankGuide).toHaveBeenCalledTimes(1);
 });
@@ -390,6 +423,27 @@ it('comparison preserves a separate return location and rejects expired or forei
   expect((await a.post('/api/guide/compare', a.body, randomUUID(), a.auth.issue!().token)).statusCode).toBe(409);
   a.body.date = new Date(Date.parse(date) + 86400000).toISOString().slice(0, 10);
   expect((await a.post('/api/guide/compare', a.body)).statusCode).toBe(409);
+});
+
+it('fixed user durations produce a no-distinct-option message instead of repeated selectable plans', async () => {
+  const a = await comparisonApi(); a.body.stops.forEach(s => { s.durationSource = 'user'; s.durationMinutes = 30; });
+  const response = await a.post('/api/guide/compare', a.body); expect(response.statusCode, response.body).toBe(200);
+  const comparison = guideComparisonSchema.parse(response.json());
+  expect(comparison.options[0].status).toBe('ready'); expect(comparison.options[1].status).toBe('ready');
+  expect(comparison.options[2]).toMatchObject({ status: 'unavailable', code: 'NO_DISTINCT_PLAN' });
+  expect(a.routeCall).toHaveBeenCalledTimes(2);
+});
+
+it('comparing a previously relaxed selection does not compound generated visit duration', async () => {
+  const a = await comparisonApi();
+  const response = await a.post('/api/guide/compare', a.body); expect(response.statusCode).toBe(200);
+  const relaxed = guideComparisonSchema.parse(response.json()).options[2];
+  if (relaxed.status !== 'ready') throw new Error('Expected a distinct relaxed plan');
+  a.body.stops = relaxed.plan.itinerary.stops.map(s => ({ ...a.body.stops.find(row => row.locationId === s.location.id)!, durationMinutes: s.durationMinutes, baseDurationMinutes: relaxed.plan.stops.find(row => row.locationId === s.location.id)!.baseDurationMinutes }));
+  const again = await a.post('/api/guide/compare', a.body); expect(again.statusCode).toBe(200);
+  const next = guideComparisonSchema.parse(again.json()).options[2];
+  if (next.status !== 'ready') throw new Error('Expected a distinct relaxed plan');
+  expect(next.plan.itinerary.stops.map(s => s.durationMinutes)).toEqual(relaxed.plan.itinerary.stops.map(s => s.durationMinutes));
 });
 
 it('comparison retains completed alternatives when a later provider fails and sends no automatic retry', async () => {
@@ -414,4 +468,17 @@ it('comparison validates meals for each option without dropping an enabled meal 
     expect(Date.parse(t.finishAt)).toBeLessThanOrEqual(Date.parse(t.deadlineAt));
     expect(option.plan.stops.filter(s => s.mealKind).every(s => s.mealDetour!.extraMinutes <= 15 && s.mealDetour!.fromPreviousMeters <= 1500)).toBe(true);
   }
+});
+
+it('longer relaxed visits trigger the existing midday meal checks when the shorter plan ends before lunch', async () => {
+  const a = await mealApi(); a.body.orderMode = 'smart'; a.body.startTime = '10:00';
+  a.body.stops.forEach(s => { s.durationSource = 'category_estimate'; s.durationMinutes = 75; });
+  const response = await a.post('/api/guide/compare', a.body); expect(response.statusCode, response.body).toBe(200);
+  const options = guideComparisonSchema.parse(response.json()).options;
+  const shorter = options[1], relaxed = options[2];
+  if (shorter.status !== 'ready' || relaxed.status !== 'ready') throw new Error(`Expected feasible meal comparison: ${JSON.stringify(options.map(o => o.status === 'unavailable' ? o.reason : 'ready'))}`);
+  expect(shorter.plan.stops.some(s => s.mealKind)).toBe(false);
+  expect(relaxed.plan.stops.some(s => s.mealKind === 'lunch')).toBe(true);
+  expect(relaxed.plan.itinerary.stops.filter((_, i) => !relaxed.plan.stops[i].mealKind).every(s => s.durationMinutes === 95)).toBe(true);
+  expect(Date.parse(relaxed.plan.itinerary.finishAt)).toBeLessThanOrEqual(Date.parse(relaxed.plan.itinerary.deadlineAt));
 });

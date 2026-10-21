@@ -26,7 +26,10 @@ for (const width of [390, 1440]) test(`compare three plans, switch previews and 
   await expect(page.getByRole('checkbox', { name: acknowledgement, exact: true })).not.toBeChecked();
   await expect(page.getByRole('button', { name: 'Accept this guided itinerary', exact: true })).toBeDisabled();
   await expect(page.locator('.guide-timeline .guide-stop-card')).toHaveCount(1);
-  await expect(comparison(page).getByRole('article', { name: 'Relaxed day', exact: true })).toContainText('Same itinerary as Less travelling');
+  const relaxed = comparison(page).getByRole('article', { name: 'Relaxed day', exact: true });
+  await expect(relaxed.locator('dl > div').filter({ hasText: 'Time at visits' })).toContainText('40 min');
+  await expect(relaxed).toContainText('Adds 25% more time');
+  await expect(comparison(page).getByRole('article', { name: 'Less travelling', exact: true }).locator('dl > div').filter({ hasText: 'Time at visits' })).toContainText('30 min');
   expect(state.comparisons).toHaveLength(1); expect(state.inputs).toHaveLength(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `.tmp/compare-plans-${width}.png`, fullPage: true });
@@ -120,4 +123,35 @@ test('expired comparison estimates cannot be selected or accepted', async ({ pag
   await comparison(page).getByRole('button', { name: 'Review Relaxed day', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('comparison route estimate expired');
   await expect(page.getByRole('button', { name: 'Accept this guided itinerary', exact: true })).toHaveCount(0);
+});
+
+test('a duplicate comparison has no second itinerary or review button', async ({ page }) => {
+  await setup(page); const plan = await existingPlan(page);
+  await page.route('**/api/guide/compare', r => r.fulfill({ json: { options: [
+    { style: 'sightseeing', status: 'ready', plan },
+    { style: 'less_travel', status: 'unavailable', code: 'NO_DISTINCT_PLAN', reason: 'This style selected the same itinerary. No separate alternative is shown.' },
+    // Compatibility with a previously returned comparison also hides duplicated choices.
+    { style: 'relaxed', status: 'ready', plan, sameAs: 'sightseeing' },
+  ] } }));
+  await page.getByRole('button', { name: 'Compare three plans', exact: true }).click();
+  await expect(comparison(page).getByRole('article', { name: 'Less travelling', exact: true })).toContainText('No separate alternative');
+  await expect(comparison(page).getByRole('article', { name: 'Relaxed day', exact: true })).toContainText('No separate alternative');
+  await expect(comparison(page).getByRole('button')).toHaveCount(1);
+});
+
+test('relaxed visit time stays distinct without compounding and survives acceptance and refresh', async ({ page }) => {
+  const state = await setup(page);
+  for (let i = 0; i < 2; i++) {
+    await page.getByRole('button', { name: 'Compare three plans', exact: true }).click();
+    await comparison(page).getByRole('button', { name: 'Review Relaxed day', exact: true }).click();
+    await expect(page.locator('.guide-stop-time')).toContainText('40 min visit');
+  }
+  expect(state.comparisons[1].stops[0]).toMatchObject({ durationMinutes: 40, baseDurationMinutes: 30 });
+  await page.getByRole('checkbox', { name: acknowledgement, exact: true }).check();
+  await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
+  const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), localKey);
+  expect(saved.acceptedGuide.itinerary.stops[0].durationMinutes).toBe(40);
+  expect(saved.acceptedGuide.stops[0].baseDurationMinutes).toBe(30);
+  await page.reload(); await expect(page.locator('.guide-stop-time')).toContainText('40 min visit');
 });
