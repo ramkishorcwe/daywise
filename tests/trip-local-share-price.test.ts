@@ -78,6 +78,21 @@ it('restores draft and accepted snapshots independently with their original iden
   expect(restored.error).toBe(''); expect(restored.trip).toEqual(value);
   expect(restored.trip?.accepted?.route.departureTime).toBe(now);
 });
+it.each(['starting_city', 'custom'] as const)('restores accepted trips from the former %s city flow without moving any endpoint', destinationMode => {
+  const store = storage(), value = { ...trip(), destinationMode };
+  store.setItem(localTripKey, JSON.stringify(value));
+  const restored = readLocalTrip(store);
+  expect(restored.error).toBe('');
+  expect(restored.trip).toEqual(value);
+  const copy = acceptedTripCopy(restored.trip!)!;
+  expect(copy.destination).toEqual(value.accepted!.destination);
+  expect(copy.start).toEqual(value.accepted!.start);
+  expect(copy.end).toEqual(value.accepted!.end);
+  expect(copy.sameReturn).toBe(false);
+  expect(copy.acceptedGuide).toEqual(value.acceptedGuide);
+  writeLocalTrip(store, copy);
+  expect(readLocalTrip(store).trip?.accepted).toEqual(value.accepted);
+});
 it('builds an accepted-only saved copy and excludes unrelated draft locations, schedules and prices', () => {
   const value = trip(), accepted = value.accepted!;
   value.title = 'Accepted name'; value.start = { ...accepted.start, name: 'Unaccepted location' }; value.preview = { ...accepted, start: value.start }; value.guideReview = null; value.startTime = '01:00'; value.endTime = '02:00'; value.date = '2000-01-01';

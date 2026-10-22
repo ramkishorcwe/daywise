@@ -7,6 +7,44 @@ async function accept(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
 }
+
+for (const destinationMode of ['starting_city', 'custom']) {
+  test(`accepted trips saved with ${destinationMode} metadata reopen with separate location fields`, async ({ page }) => {
+    const state = await setup(page);
+    await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
+    await accept(page);
+    const endpoints = await page.evaluate(async ({ key, destinationMode }) => {
+      const value = JSON.parse(localStorage.getItem(key)!);
+      value.destinationMode = destinationMode;
+      localStorage.setItem(key, JSON.stringify(value));
+      await new Promise<void>((resolve, reject) => {
+        const opening = indexedDB.open('daywise-accepted-trips', 1);
+        opening.onerror = () => reject(opening.error);
+        opening.onsuccess = () => {
+          const db = opening.result, tx = db.transaction('trips', 'readwrite');
+          tx.objectStore('trips').put(value);
+          tx.oncomplete = () => { db.close(); resolve(); };
+          tx.onerror = () => { db.close(); reject(tx.error); };
+        };
+      });
+      return { destination: value.accepted.destination, start: value.accepted.start, end: value.accepted.end };
+    }, { key, destinationMode });
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'My day plan', exact: true }).click();
+    await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toBeVisible();
+    expect(await page.evaluate(k => {
+      const value = JSON.parse(localStorage.getItem(k)!);
+      return { destination: value.accepted.destination, start: value.accepted.start, end: value.accepted.end };
+    }, key)).toEqual(endpoints);
+    expect(state.inputs).toHaveLength(1);
+    await page.getByRole('button', { name: 'Saved plans', exact: true }).click();
+    await expect(page.locator('.saved-card')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Open saved itinerary', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Whole journey map', exact: true })).toBeVisible();
+  });
+}
 test('form edits and generated previews do not save; acceptance saves one itinerary with its prices', async ({ page }) => {
   await setup(page, false, true);
   await expect(page.getByRole('button', { name: 'Trip budget', exact: true })).toHaveCount(0);
@@ -55,7 +93,7 @@ test('an old unaccepted auto-saved draft is not shown as a saved itinerary', asy
   await page.evaluate(k => { const raw = JSON.parse(localStorage.getItem(k)!); raw.accepted = null; raw.acceptedGuide = null; raw.acceptedId = null; localStorage.setItem(k, JSON.stringify(raw)); }, key);
   // Keep the legacy draft on disk while removing this test's accepted library record.
   await page.evaluate(() => new Promise<void>((resolve, reject) => { const opening = indexedDB.open('daywise-accepted-trips', 1); opening.onerror = () => reject(opening.error); opening.onsuccess = () => { const db = opening.result, tx = db.transaction('trips', 'readwrite'); tx.objectStore('trips').clear(); tx.oncomplete = () => { db.close(); resolve(); }; }; }));
-  await page.reload(); await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveCount(0);
+  await page.reload(); await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveValue('');
   await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(0);
   expect(await page.evaluate(k => !!localStorage.getItem(k), key)).toBe(true);
 });

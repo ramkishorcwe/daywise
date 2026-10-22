@@ -28,7 +28,7 @@ async function mocks(page: Page, outside = false) {
   });
   return { selections, routeInputs, reverses };
 }
-async function choose(page: Page, label: string, text: string) { if (label === 'Destination city' && !await page.getByRole('combobox', { name: label, exact: true }).isVisible()) { await page.getByRole('button', { name: /^(Choose another city|Change city)$/ }).click(); } await page.getByRole('combobox', { name: label, exact: true }).fill(text); const options = page.getByRole('listbox', { name: `${label} suggestions`, exact: true }); await expect(options.getByRole('option')).toHaveCount(1); await page.getByRole('combobox', { name: label, exact: true }).press('Enter'); if (label === 'Destination city') await expect(page.getByRole('region', { name: 'City to explore', exact: true })).toContainText('Exploring:'); else await expect(page.getByRole('region', { name: `${label} picker`, exact: true }).locator('.validated-location')).toBeVisible(); }
+async function choose(page: Page, label: string, text: string) { await page.getByRole('combobox', { name: label, exact: true }).fill(text); const options = page.getByRole('listbox', { name: `${label} suggestions`, exact: true }); await expect(options.getByRole('option')).toHaveCount(1); await page.getByRole('combobox', { name: label, exact: true }).press('Enter'); await expect(page.getByRole('region', { name: `${label} picker`, exact: true }).locator('.validated-location')).toBeVisible(); }
 async function essentials(page: Page, gps = false) { await choose(page, 'Destination city', 'city'); if (!gps) await choose(page, 'Starting location', 'hotel'); await page.getByLabel('Travel date', { exact: true }).fill(new Date(Date.now() + 86400000).toISOString().slice(0, 10)); }
 async function stubMap(page: Page) {
   await page.addInitScript(() => {
@@ -120,7 +120,7 @@ test('optimized preview marker numbers follow the accepted route order rather th
 
 test('normal real-location screen starts empty and missing APIs return errors without suggestions or coordinates', async ({ page }) => {
   await page.goto('/?live=1'); await expect(page.getByRole('heading', { name: 'Your day starts here.', exact: true })).toBeVisible();
-  await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveCount(0); await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toHaveValue('');
+  await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveValue(''); await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Plan my day', exact: true })).toBeDisabled(); await expect(page.getByText(/Demo stay|jaipur-test|Harbor City/)).toHaveCount(0);
   await page.getByRole('combobox', { name: 'Starting location', exact: true }).fill('hotel'); await expect(page.getByRole('region', { name: 'Starting location picker', exact: true }).getByRole('alert')).toContainText('Configure');
   await expect(page.getByRole('listbox', { name: 'Starting location suggestions', exact: true }).getByRole('option')).toHaveCount(0); await expect(page.locator('.validated-location')).toHaveCount(0);
@@ -131,7 +131,7 @@ test('localhost preview reaches destination and GPS endpoints without an origin 
   await context.grantPermissions(['geolocation']); await context.setGeolocation({ ...coordinates, accuracy: 18 });
   await page.goto(url.href);
   const lookup = page.waitForResponse(response => response.url().endsWith('/api/locations/autocomplete'));
-  await page.getByRole('button', { name: 'Choose another city', exact: true }).click(); await page.getByRole('combobox', { name: 'Destination city', exact: true }).fill('Jaipur');
+  await page.getByRole('combobox', { name: 'Destination city', exact: true }).fill('Jaipur');
   expect((await lookup).status()).toBe(503);
   await expect(page.getByRole('region', { name: 'Destination city picker', exact: true }).getByRole('alert')).toContainText('Configure');
   const reverse = page.waitForResponse(response => response.url().endsWith('/api/locations/reverse'));
@@ -195,7 +195,7 @@ test('different starting city requires consent and selecting an in-city start ne
   await mocks(page, true); await context.grantPermissions(['geolocation']); await context.setGeolocation({ ...outsideCoordinates, accuracy: 20 }); await page.goto('/?live=1'); await essentials(page, true); await page.getByRole('button', { name: 'Use my current location', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Starting city review', exact: true })).toContainText('Other provider city'); await expect(page.getByRole('button', { name: 'Plan my day', exact: true })).toBeDisabled();
   await page.getByRole('checkbox', { name: 'Travel from this starting location to my destination', exact: true }).check(); await expect(page.getByRole('button', { name: 'Plan my day', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: 'Select a start within the destination city', exact: true }).click(); await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toHaveValue(''); await expect(page.getByRole('region', { name: 'City to explore', exact: true })).toContainText('Exploring: Provider city');
+  await page.getByRole('button', { name: 'Select a start within the destination city', exact: true }).click(); await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toHaveValue(''); await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveValue('Provider city');
   await choose(page, 'Starting location', 'destinationhotel'); await expect(page.getByRole('region', { name: 'Starting city review', exact: true })).toHaveCount(0); await expect(page.getByRole('button', { name: 'Plan my day', exact: true })).toBeEnabled();
 });
 

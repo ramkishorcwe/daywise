@@ -94,7 +94,7 @@ test('local storage failures keep the previous trip, show retry and do not false
 test('malformed local data is preserved until explicit deletion', async ({ page }) => {
   await setup(page); await generate(page); await page.evaluate(k => localStorage.setItem(k, '{broken'), key); await page.reload();
   await expect(page.getByRole('alert')).toContainText('stored copy has been preserved'); expect(await page.evaluate(k => localStorage.getItem(k), key)).toBe('{broken');
-  await page.getByRole('button', { name: /^(Choose another city|Change city)$/ }).click(); await page.getByRole('combobox', { name: 'Destination city', exact: true }).fill('query'); await page.getByRole('listbox', { name: 'Destination city suggestions', exact: true }).getByRole('button').first().click();
+  await page.getByRole('combobox', { name: 'Destination city', exact: true }).fill('query'); await page.getByRole('listbox', { name: 'Destination city suggestions', exact: true }).getByRole('button').first().click();
   expect(await page.evaluate(k => localStorage.getItem(k), key)).toBe('{broken');
   await page.getByRole('button', { name: 'Delete local trip', exact: true }).click(); await page.getByRole('button', { name: 'Delete trip from this device', exact: true }).click(); await expect(page.getByRole('dialog')).toHaveCount(0); expect(await savedTrip(page)).toBeNull();
 });
@@ -108,7 +108,6 @@ test('expired saved estimates remain readable and cannot be silently accepted as
 });
 test('cleared draft fields remain cleared after refresh and local deletion reaches another open tab', async ({ page }) => {
   await setup(page);
-  await page.getByRole('button', { name: 'Change city', exact: true }).click();
   await page.getByRole('button', { name: 'Clear destination city', exact: true }).click();
   await page.getByRole('button', { name: 'Clear starting location', exact: true }).click();
   await page.getByLabel('Travel date', { exact: true }).fill('');

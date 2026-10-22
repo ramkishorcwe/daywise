@@ -22,7 +22,7 @@ for (const width of [390, 1440]) test(`festival notices follow draft dates witho
   await page.getByLabel('Travel date', { exact: true }).fill('2027-04-11'); await expect(notice).not.toContainText('Possible festival traffic');
   await notice.getByText('Festival coverage', { exact: true }).click(); await expect(notice).toContainText('even when no notice appears');
   await page.getByLabel('Travel date', { exact: true }).fill('2027-08-04'); await expect(notice).toContainText('Teej');
-  await page.getByRole('button', { name: 'Change city', exact: true }).click(); await page.getByRole('combobox', { name: 'Destination city', exact: true }).fill('another city');
+  await page.getByRole('combobox', { name: 'Destination city', exact: true }).fill('another city');
   await expect(notice).toHaveCount(0);
   await page.waitForTimeout(1300);
   expect(state.inputs).toHaveLength(0); expect(discoveries).toBe(0);

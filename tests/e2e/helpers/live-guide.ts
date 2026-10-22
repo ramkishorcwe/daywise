@@ -8,7 +8,7 @@ import type { SelectedLocation } from '../../../packages/contracts/src/locations
 const date = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 const identity = { placeId: 'provider-city-id', name: 'Provider city', countryCode: 'GB' };
 const location = (name: string, city = false): SelectedLocation => ({ id: randomUUID(), placeId: name.replaceAll(' ', '-'), name, address: `${name}, provider address`, provider: 'google', source: 'search', coordinates: { latitude: 51.5, longitude: 0 }, city: identity, types: [city ? 'locality' : 'tourist_attraction'], ...(city ? { timezone: 'UTC' } : {}), fetchedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 1800000).toISOString(), persistence: 'memory_only', receiptStatus: 'registered' });
-export async function setup(page: Page, withMeals = false, withPrices = false, festivalSearch = false, startingCityFlow: boolean | 'empty' = false) {
+export async function setup(page: Page, withMeals = false, withPrices = false, festivalSearch = false) {
   const createLocation = (name: string, city = false) => { const l = location(name, city); if (withPrices) l.city = { ...identity, name: 'Jaipur', countryCode: 'IN' }; return l; };
   const rates = { quote: async () => ({ rate: .01048, date, sourceUrl: 'https://api.frankfurter.dev/v2/rate/inr/usd' }) };
   const places = new Map<string, SelectedLocation>(), inputs: GuidePlanRequest[] = [], museum = createLocation(withPrices ? 'Nahargarh Fort' : 'Provider Museum'), garden = createLocation(withPrices ? 'City Palace' : 'Provider Garden');
@@ -23,7 +23,7 @@ export async function setup(page: Page, withMeals = false, withPrices = false, f
   });
   await page.route('**/api/locations/config', r => r.fulfill({ json: { autocomplete: true, reverseGeocode: true, timezone: true, routing: true, guideDiscovery: true, guideRouting: true, guideAssistant: 'local', festivalSearch } }));
   await page.route('**/api/locations/autocomplete', r => r.fulfill({ json: { provider: 'google', suggestions: [{ placeId: 'provider-search-id', text: 'Provider selected place' }] } }));
-  await page.route('**/api/locations/resolve', async r => { const body = r.request().postDataJSON(); const l = createLocation(body.destinationCity ? withPrices ? 'Jaipur' : 'Provider city' : 'Provider start', body.destinationCity); if (startingCityFlow && body.destinationCity) l.coordinates = { latitude: 51.7, longitude: .2 }; places.set(l.id, l); await r.fulfill({ json: l }); });
+  await page.route('**/api/locations/resolve', async r => { const body = r.request().postDataJSON(); const l = createLocation(body.destinationCity ? withPrices ? 'Jaipur' : 'Provider city' : 'Provider start', body.destinationCity); places.set(l.id, l); await r.fulfill({ json: l }); });
   await page.route('**/api/guide/discover', async r => { const p = guidePreferencesSchema.parse(r.request().postDataJSON().preferences); await r.fulfill({ json: { candidates: withPrices ? await Promise.all(bank.map(c => pricedCandidate(c, p, rates))) : bank, warnings: ['Admission costs are unverified.'], assistantMode: 'local' } }); });
   await page.route('**/api/guide/photo', r => r.fulfill({ json: { photo: null } }));
   const buildPlan = async (body: GuidePlanRequest) => {
@@ -59,9 +59,7 @@ export async function setup(page: Page, withMeals = false, withPrices = false, f
     await r.fulfill({ json: { options } });
   });
   await page.goto('/?live=1');
-  if (!startingCityFlow) await page.getByRole('button', { name: 'Choose another city', exact: true }).click();
-  for (const label of startingCityFlow === 'empty' ? [] : startingCityFlow ? ['Starting location'] : ['Destination city', 'Starting location']) { await page.getByRole('combobox', { name: label, exact: true }).fill('search'); await page.getByRole('listbox', { name: `${label} suggestions` }).getByRole('button').first().click(); if (label === 'Destination city') await expect(page.getByRole('region', { name: 'City to explore', exact: true })).toContainText('Exploring:'); else await expect(page.getByRole('region', { name: `${label} picker` }).locator('.validated-location')).toBeVisible(); }
-  if (startingCityFlow === true) await expect(page.getByRole('region', { name: 'City to explore', exact: true })).toContainText('Exploring:');
+  for (const label of ['Destination city', 'Starting location']) { await page.getByRole('combobox', { name: label, exact: true }).fill('search'); await page.getByRole('listbox', { name: `${label} suggestions` }).getByRole('button').first().click(); await expect(page.getByRole('region', { name: `${label} picker` }).locator('.validated-location')).toBeVisible(); }
   await page.getByLabel('Travel date', { exact: true }).fill(date);
-  return { inputs, comparisons, bank, places };
+  return { inputs, comparisons, bank };
 }

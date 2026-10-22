@@ -9,6 +9,7 @@ export const localTripKey = 'daywise-live-active-v1';
 export const localTripSchema = z.strictObject({
   version: z.literal(1), updatedAt: z.iso.datetime(), savedDayId: z.string().uuid().optional(),
   destination: locationSchema.nullable(), start: locationSchema.nullable(), end: locationSchema.nullable(),
+  // Read accepted trips saved by the former detected-city flow without changing either location.
   destinationMode: z.enum(['starting_city', 'custom']).optional(),
   sameReturn: z.boolean(), outsideConsent: z.boolean(), stops: z.array(z.strictObject({ key: z.string().uuid(), location: locationSchema.nullable(), durationMinutes: z.number().int().min(0).max(480) })).min(1).max(7),
   date: z.string().regex(/^(?:|\d{4}-\d{2}-\d{2})$/), startTime: z.string().max(5), endTime: z.string().max(5), optimize: z.boolean(),
