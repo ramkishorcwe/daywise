@@ -154,3 +154,13 @@
 @media (prefers-reduced-motion: reduce) { .live-shell *, .live-shell *::before, .live-shell *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 
 .live-shell .choose-places-launch { border: 1px solid #dce4d5; background: #f0f5eb; border-radius: 16px; padding: 18px; margin: 20px 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.live-shell .starting-city { margin: 16px 0 24px; padding: 16px 18px; border: 1px solid #dce7d4; border-radius: 14px; background: #f0f5eb; min-width: 0; }
+.live-shell .starting-city-confirmed { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.live-shell .starting-city-confirmed > div { min-width: 0; flex: 1; }
+.live-shell .starting-city-confirmed p { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0; overflow-wrap: anywhere; }
+.live-shell .starting-city-confirmed svg { flex-shrink: 0; margin-top: 3px; }
+.live-shell .starting-city .eyebrow { font-size: 9px; letter-spacing: 1.2px; }
+.live-shell .starting-city-empty { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.live-shell .starting-city .field-note { margin: 0; flex: 1; }
+.live-shell .starting-city-picker .real-location-field { margin-top: 0; }
+.live-shell .starting-city .error-box { margin: 12px 0 0; }

@@ -85,7 +85,7 @@ test('category switching ignores stale results, search needs a selection, and ch
   await expect(page.getByRole('button', { name: 'Add Provider Museum', exact: true })).toHaveCount(0);
   await page.getByRole('combobox', { name: 'Search another place', exact: true }).fill('unselected text'); await expect(page.getByRole('button', { name: 'Add searched place', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Back to day planner', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Destination city', exact: true }).fill('another'); await page.getByRole('listbox', { name: 'Destination city suggestions' }).getByRole('button').first().click();
+  await page.getByRole('button', { name: 'Change city', exact: true }).click(); await page.getByRole('combobox', { name: 'Destination city', exact: true }).fill('another'); await page.getByRole('listbox', { name: 'Destination city suggestions' }).getByRole('button').first().click();
   await open(page); await expect(page.getByRole('heading', { name: 'Your visits · 0/5', exact: true })).toBeVisible(); expect(inputs).toHaveLength(0); expect(requests).toBe(2);
 });
 

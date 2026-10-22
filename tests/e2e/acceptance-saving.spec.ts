@@ -55,7 +55,7 @@ test('an old unaccepted auto-saved draft is not shown as a saved itinerary', asy
   await page.evaluate(k => { const raw = JSON.parse(localStorage.getItem(k)!); raw.accepted = null; raw.acceptedGuide = null; raw.acceptedId = null; localStorage.setItem(k, JSON.stringify(raw)); }, key);
   // Keep the legacy draft on disk while removing this test's accepted library record.
   await page.evaluate(() => new Promise<void>((resolve, reject) => { const opening = indexedDB.open('daywise-accepted-trips', 1); opening.onerror = () => reject(opening.error); opening.onsuccess = () => { const db = opening.result, tx = db.transaction('trips', 'readwrite'); tx.objectStore('trips').clear(); tx.oncomplete = () => { db.close(); resolve(); }; }; }));
-  await page.reload(); await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveValue('');
+  await page.reload(); await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(0);
   expect(await page.evaluate(k => !!localStorage.getItem(k), key)).toBe(true);
 });
