@@ -1,3 +1,4 @@
+import { activeAcceptedTrip } from './helpers/accepted-trips';
 import { expect, test, type Page } from '@playwright/test';
 import { setup } from './helpers/live-guide';
 import { savedAcceptedTrips } from './helpers/accepted-trips';
@@ -38,7 +39,7 @@ for (const width of [390, 1440]) test(`compare three plans, switch previews and 
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
   await expect.poll(async () => (await savedAcceptedTrips(page)).length).toBe(1);
-  const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), localKey);
+  const saved = await activeAcceptedTrip(page);
   expect(saved.acceptedGuide.itinerary.stops).toHaveLength(1);
   await page.reload(); await expect(page.locator('.guide-timeline .guide-stop-card')).toHaveCount(1);
 });
@@ -150,7 +151,7 @@ test('relaxed visit time stays distinct without compounding and survives accepta
   await page.getByRole('checkbox', { name: acknowledgement, exact: true }).check();
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
-  const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), localKey);
+  const saved = await activeAcceptedTrip(page);
   expect(saved.acceptedGuide.itinerary.stops[0].durationMinutes).toBe(40);
   expect(saved.acceptedGuide.stops[0].baseDurationMinutes).toBe(30);
   await page.reload(); await expect(page.locator('.guide-stop-time')).toContainText('40 min visit');

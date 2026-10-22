@@ -1,6 +1,7 @@
 import { EvidenceReceipts } from './receipts';
 import { FirestoreBudget } from './hosted-budget';
 import { FirestoreSharedTrips } from './shared-trips';
+import { FirestoreAcceptedItineraries, LocalAcceptedItineraries } from './accepted-itineraries';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createServer } from './server';
@@ -29,6 +30,8 @@ export async function configuredServer(hosted = false) {
   const directory = resolve(process.env.LOCAL_DATA_DIR ?? '.local');
   const adapters = mode === 'local' ? { auth: localAuthenticator(await loadLocalSecret(directory)), store: new LocalTripStore(resolve(directory, 'trips.json')) } : firebaseAdapters(process.env.FIREBASE_PROJECT_ID!);
   if (adapters.store instanceof LocalTripStore) await adapters.store.initialize();
+  const itineraries = mode === 'local' ? new LocalAcceptedItineraries(resolve(directory, 'accepted-itineraries.json')) : new FirestoreAcceptedItineraries((adapters as ReturnType<typeof firebaseAdapters>).db);
+  if (itineraries instanceof LocalAcceptedItineraries) await itineraries.initialize();
   const maintenance = await new MaintenanceStore(resolve(process.env.MAINTENANCE_DIR ?? 'catalogs/private/maintenance')).read();
   if (maintenance.revision && process.env.CHECKED_CATALOG_PATH) throw new Error('Choose reviewed maintenance state or CHECKED_CATALOG_PATH, not both.');
   const catalog = process.env.CHECKED_CATALOG_PATH ? checkedCatalogSchema.parse(JSON.parse(await readFile(resolve(process.env.CHECKED_CATALOG_PATH), 'utf8'))) : maintenance.content.catalog;
@@ -45,6 +48,6 @@ export async function configuredServer(hosted = false) {
   const { keys, issues } = validateGoogleConfiguration(process.env);
   const routes = keys.GOOGLE_ROUTES_API_KEY ? new GoogleRoutes(keys.GOOGLE_ROUTES_API_KEY) : undefined;
   const locationCapabilities = { autocomplete: !!keys.GOOGLE_PLACES_API_KEY, reverseGeocode: !!keys.GOOGLE_GEOCODING_API_KEY, timezone: !!keys.GOOGLE_TIME_ZONE_API_KEY, routing: !!routes };
-  const server = await createServer({ ...adapters, ...(assistantMode === 'gemini' && process.env.FESTIVAL_SEARCH_ENABLED !== 'false' ? { festivalSearch: new GeminiFestivalSearch(process.env.GEMINI_API_KEY!, process.env.FESTIVAL_SEARCH_MODEL || process.env.GEMINI_MODEL!) } : {}), ...(hosted ? { receipts: new EvidenceReceipts(process.env.EVIDENCE_RECEIPT_SECRET ?? ''), hostedBudget: new FirestoreBudget((adapters as ReturnType<typeof firebaseAdapters>).db), shares: new FirestoreSharedTrips((adapters as ReturnType<typeof firebaseAdapters>).db) } : {}), interpreter, aiDailyLimit, providerDailyLimit, operatorToken, fixtures: false, catalog: new CheckedCatalog(catalog.cities), routes, liveRoutes: routes, locations: Object.values(locationCapabilities).some(Boolean) ? new GoogleLocations(keys.GOOGLE_PLACES_API_KEY, keys.GOOGLE_GEOCODING_API_KEY, keys.GOOGLE_TIME_ZONE_API_KEY) : undefined, guide: keys.GOOGLE_PLACES_API_KEY ? new GoogleGuidePlaces(keys.GOOGLE_PLACES_API_KEY) : undefined, locationCapabilities, locationConfigurationIssues: issues, places: keys.GOOGLE_PLACES_API_KEY ? new GooglePlaces(keys.GOOGLE_PLACES_API_KEY) : undefined, webOrigin, logger: true });
+  const server = await createServer({ ...adapters, itineraries, ...(assistantMode === 'gemini' && process.env.FESTIVAL_SEARCH_ENABLED !== 'false' ? { festivalSearch: new GeminiFestivalSearch(process.env.GEMINI_API_KEY!, process.env.FESTIVAL_SEARCH_MODEL || process.env.GEMINI_MODEL!) } : {}), ...(hosted ? { receipts: new EvidenceReceipts(process.env.EVIDENCE_RECEIPT_SECRET ?? ''), hostedBudget: new FirestoreBudget((adapters as ReturnType<typeof firebaseAdapters>).db), shares: new FirestoreSharedTrips((adapters as ReturnType<typeof firebaseAdapters>).db) } : {}), interpreter, aiDailyLimit, providerDailyLimit, operatorToken, fixtures: false, catalog: new CheckedCatalog(catalog.cities), routes, liveRoutes: routes, locations: Object.values(locationCapabilities).some(Boolean) ? new GoogleLocations(keys.GOOGLE_PLACES_API_KEY, keys.GOOGLE_GEOCODING_API_KEY, keys.GOOGLE_TIME_ZONE_API_KEY) : undefined, guide: keys.GOOGLE_PLACES_API_KEY ? new GoogleGuidePlaces(keys.GOOGLE_PLACES_API_KEY) : undefined, locationCapabilities, locationConfigurationIssues: issues, places: keys.GOOGLE_PLACES_API_KEY ? new GooglePlaces(keys.GOOGLE_PLACES_API_KEY) : undefined, webOrigin, logger: true });
   return server;
 }

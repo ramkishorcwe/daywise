@@ -5,7 +5,7 @@ import type { Coordinate } from '../../../packages/contracts/src/api';
 import type { LocationPreview } from './location';
 
 let connecting: Promise<unknown> | null = null;
-async function connected(signal?: AbortSignal) {
+export async function connected(signal?: AbortSignal) {
   if (!backendConnected()) {
     if (!connecting) connecting = connectBackend().finally(() => { connecting = null; });
     if (!signal) await connecting;

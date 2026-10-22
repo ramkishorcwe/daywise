@@ -10,11 +10,11 @@ import type { LiveExpenses } from '../../../packages/contracts/src/live-expenses
 import type { LiveProgress as ProgressReport } from '../../../packages/contracts/src/live-progress';
 import { generateLiveItinerary, locateCoordinates, locationConfiguration, selectLocation } from './location-api';
 import { deleteLiveDay, locationReference } from './live-storage';
-import { acceptedTripCopy, saveAcceptedTrip, updateAcceptedTrip, listAcceptedTrips, deleteAcceptedTrip } from './accepted-trips';
+import { acceptedTripCopy, saveAcceptedTrip, updateAcceptedTrip, listAcceptedTrips, deleteAcceptedTrip, restoreAcceptedTrip, openAcceptedTrip } from './accepted-trips';
 import './live-app.css';
 import type { GuidePlan, SavedGuide } from '../../../packages/contracts/src/guide';
 import { mapsNavigation as navigationLink } from './maps-navigation';
-import { readLocalTrip, writeLocalTrip, removeLocalTrip, localTripKey, type LocalTrip } from './live-session';
+import { readTripReferences, writeAcceptedReference, removeLocalTrip, localTripKey, type LocalTrip } from './live-session';
 import { pricePlanKey, tripPrice, priceRange, type PriceAllowances } from './trip-price';
 import TripPriceSummary from './components/TripPriceSummary';
 import Dialog from './components/Dialog';
@@ -32,19 +32,22 @@ type Stop = { key: string; location: SelectedLocation | null; durationMinutes: n
 type ScheduleCheck = (input: { date: string; startTime: string; endTime: string }, destination: SelectedLocation) => void;
 const emptyStop = (): Stop => ({ key: crypto.randomUUID(), location: null, durationMinutes: 60 });
 export default function LiveApp() {
-  const [epoch, setEpoch] = useState(0);
-  return <LiveWorkspace key={epoch} reset={() => setEpoch(value => value + 1)} />;
+  const [epoch, setEpoch] = useState(0), [fresh, setFresh] = useState(false);
+  const [recovery, setRecovery] = useState<{ trip: LocalTrip | null; error: string } | null>(null);
+  useEffect(() => { let active = true; setRecovery(null); if (fresh) { setRecovery({ trip: null, error: '' }); return; } restoreAcceptedTrip().then(value => { if (active) setRecovery(value); }).catch(() => { if (active) setRecovery({ trip: null, error: 'Saved itinerary storage is unavailable. Enable storage and retry.' }); }); return () => { active = false; }; }, [epoch, fresh]);
+  const reset = () => { setRecovery(null); setFresh(false); setEpoch(value => value + 1); };
+  const newTrip = () => { setRecovery(null); setFresh(true); setEpoch(value => value + 1); };
+  return recovery ? <LiveWorkspace key={epoch} recovery={recovery} reset={reset} newTrip={newTrip} /> : <main><p role="status">Opening your saved itinerary…</p></main>;
 }
-function LiveWorkspace({ reset }: { reset: () => void }) {
-  const [recovery] = useState(() => { try { return readLocalTrip(localStorage); } catch { return { trip: null, error: 'Local storage is unavailable. Your trip cannot survive refresh until storage is enabled.' }; } });
+function LiveWorkspace({ reset, newTrip, recovery }: { reset: () => void; newTrip: () => void; recovery: { trip: LocalTrip | null; error: string } }) {
   const initial = recovery.trip ? acceptedTripCopy(recovery.trip) : null;
-  const [restored, setRestored] = useState(!!(initial?.destination || initial?.start || initial?.end)), [saveStatus, setSaveStatus] = useState(initial ? 'Saved trip restored on this device.' : ''), [storageError, setStorageError] = useState(recovery.error), [saveRetry, setSaveRetry] = useState(0);
+  const [restored, setRestored] = useState(!!(initial?.destination || initial?.start || initial?.end)), [saveStatus, setSaveStatus] = useState(initial ? 'Saved itinerary restored.' : ''), [storageError, setStorageError] = useState(recovery.error), [saveRetry, setSaveRetry] = useState(0);
   const [savedDayId] = useState(initial?.savedDayId), [priceAllowances, setPriceAllowances] = useState<PriceAllowances | undefined>(initial?.priceAllowances);
   const [acceptedPriceAllowances, setAcceptedPriceAllowances] = useState<PriceAllowances | undefined>(() => initial?.acceptedPriceAllowances ?? (initial?.acceptedGuide && initial.priceAllowances?.planKey === pricePlanKey(initial.acceptedGuide) ? initial.priceAllowances : undefined));
   const [sharing, setSharing] = useState(false), [deleting, setDeleting] = useState(false), [deleteBusy, setDeleteBusy] = useState(false), [guideEpoch, setGuideEpoch] = useState(0);
   const deleted = useRef(false), hasSavedTrip = useRef(!!initial);
   const acceptedCopy = useRef<LocalTrip | null>(initial), historyWrite = useRef<Promise<void>>(Promise.resolve());
-  const pendingAcceptance = useRef(false);
+  const pendingAcceptance = useRef(!!initial?.acceptedId && (() => { try { return readTripReferences(localStorage).pendingIds.includes(initial.acceptedId!); } catch { return false; } })());
   const lastSaveRetry = useRef(0);
   const [deleteTarget, setDeleteTarget] = useState<LocalTrip | null>(null);
   const [destination, setDestination] = useState<SelectedLocation | null>(initial?.destination ?? null), [start, setStart] = useState<SelectedLocation | null>(initial?.start ?? null), [end, setEnd] = useState<SelectedLocation | null>(initial?.end ?? null), [sameReturn, setSameReturn] = useState(initial?.sameReturn ?? true), [outsideConsent, setOutsideConsent] = useState(initial?.outsideConsent ?? false);
@@ -77,12 +80,16 @@ function LiveWorkspace({ reset }: { reset: () => void }) {
     acceptedCopy.current = copy;
     if (create) pendingAcceptance.current = true;
     try {
-      if (create || readLocalTrip(localStorage).trip?.acceptedId === copy.acceptedId) writeLocalTrip(localStorage, copy);
-      hasSavedTrip.current = true; setSaveStatus('Accepted itinerary saved on this device'); setStorageError('');
-      historyWrite.current = historyWrite.current.catch(() => {}).then(async () => { if (create) { await saveAcceptedTrip(copy); if (acceptedCopy.current?.acceptedId === copy.acceptedId) pendingAcceptance.current = false; } else await updateAcceptedTrip(copy); });
-      void historyWrite.current.catch(() => setStorageError('The accepted trip is available, but saving to Saved plans failed. Check device storage and retry.'));
+      writeAcceptedReference(localStorage, copy.acceptedId!, true, create || readTripReferences(localStorage).acceptedId === copy.acceptedId);
+      hasSavedTrip.current = true; setSaveStatus('Saving accepted itinerary to database…'); setStorageError('');
+      historyWrite.current = historyWrite.current.catch(() => {}).then(async () => {
+        if (create) { await saveAcceptedTrip(copy); if (acceptedCopy.current?.acceptedId === copy.acceptedId) pendingAcceptance.current = false; } else await updateAcceptedTrip(copy);
+        if (!deleted.current && acceptedCopy.current?.acceptedId === copy.acceptedId) setSaveStatus('Accepted itinerary saved to database · ID kept on this device');
+      });
+      void historyWrite.current.catch(() => { if (!deleted.current) { setSaveStatus('Accepted itinerary kept in device backup'); setStorageError('Database saving failed. Your accepted itinerary is preserved in the device backup. Check your connection and retry saving.'); } });
     } catch { setStorageError('Local saving failed. Your accepted trip is still on screen. Check device storage and retry.'); }
   }
+  useEffect(() => { if (initial && pendingAcceptance.current && !recovery.error) persistAccepted(initial, true); }, []);
   useEffect(() => {
     const copy = acceptedCopy.current;
     if (!copy || copy.acceptedId !== acceptedId || recovery.error || deleted.current || deleteBusy) return;
@@ -94,22 +101,20 @@ function LiveWorkspace({ reset }: { reset: () => void }) {
   }, [acceptedId, expenses, progress, acceptedPriceAllowances, saveRetry, recovery.error]);
   useEffect(() => {
     const removed = (event: StorageEvent) => {
-      if ((event.key === localTripKey || event.key === null) && event.newValue === null && hasSavedTrip.current) {
+      if ((event.key === localTripKey || event.key === null) && hasSavedTrip.current && (event.newValue === null || (acceptedId && !readTripReferences(localStorage).ids.includes(acceptedId)))) {
         deleted.current = true; request.current?.abort(); pin.current?.abort(); generation.current++; reset();
       }
     };
     window.addEventListener('storage', removed);
     return () => window.removeEventListener('storage', removed);
-  }, [reset]);
+  }, [reset, acceptedId]);
   async function deleteCurrentTrip() {
     if (deleteBusy) return; setDeleteBusy(true);
     try {
       await historyWrite.current.catch(() => {});
       if (deleteTarget?.acceptedId && deleteTarget.acceptedId !== acceptedId) { await deleteAcceptedTrip(deleteTarget.acceptedId); setDeleteTarget(null); setDeleting(false); setDeleteBusy(false); await library(); return; }
-      const previous = acceptedCopy.current;
-      removeLocalTrip(localStorage);
-      try { if (acceptedId) await deleteAcceptedTrip(acceptedId); if (savedDayId) await deleteLiveDay(savedDayId); }
-      catch (failure) { if (previous) writeLocalTrip(localStorage, previous); throw failure; }
+      if (acceptedId) await deleteAcceptedTrip(acceptedId); else removeLocalTrip(localStorage);
+      if (savedDayId) await deleteLiveDay(savedDayId);
       deleted.current = true; request.current?.abort(); pin.current?.abort(); generation.current++; reset();
     }
     catch { setStorageError('The local trip could not be deleted. Check storage access and retry.'); setDeleteBusy(false); }
@@ -158,15 +163,16 @@ function LiveWorkspace({ reset }: { reset: () => void }) {
     try {
       await historyWrite.current.catch(() => {});
       const result = await listAcceptedTrips(), rows = new Map(result.trips.map(trip => [trip.acceptedId!, trip]));
-      const active = readLocalTrip(localStorage).trip;
+      const active = acceptedCopy.current;
       if (active?.accepted && active.acceptedId) rows.set(active.acceptedId, acceptedTripCopy(active)!);
       setSaved([...rows.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
-      if (result.skipped) setSavedError(`${result.skipped} unsupported record(s) were preserved.`);
+      if (result.skipped || result.warning) setSavedError([result.warning, result.skipped ? `${result.skipped} unsupported record(s) were preserved.` : ''].filter(Boolean).join(' '));
     } catch { setSavedError('Saved itineraries could not be loaded. Retry; your accepted trip remains available.'); }
   }
-  function openSaved(day: LocalTrip) {
-    try { writeLocalTrip(localStorage, day); reset(); }
+  async function openSaved(day: LocalTrip) {
+    try { setBusy(true); await openAcceptedTrip(day.acceptedId!); reset(); }
     catch { setSavedError('This itinerary could not be opened. Check device storage and retry.'); }
+    finally { setBusy(false); }
   }
   function guidedPreview(plan: GuidePlan | null) { setGuideReview(plan); setPreview(plan?.itinerary ?? null); if (plan) setStops(plan.itinerary.stops.map(stop => ({ key: crypto.randomUUID(), location: stop.location, durationMinutes: stop.durationMinutes }))); }
   function guidedAccept(plan: GuidePlan, chosen?: SavedGuide) {
@@ -178,7 +184,7 @@ function LiveWorkspace({ reset }: { reset: () => void }) {
       persistAccepted(copy, true);
     }
     if (chosen) { setGuideSaved(chosen); setGuideReview(guide); setPreview(itinerary); setGuideEpoch(n => n + 1); }
-    setAccepted(itinerary); setAcceptedGuide(guide); setAcceptedPriceAllowances(allowances); setAcceptedId(id); setTitle(title.trim() || `${itinerary.destination.name} · ${date}`.slice(0, 160)); setNotice('Guided itinerary accepted and saved. Later edits are not saved until you accept again.'); setView('day');
+    setAccepted(itinerary); setAcceptedGuide(guide); setAcceptedPriceAllowances(allowances); setAcceptedId(id); setTitle(title.trim() || `${itinerary.destination.name} · ${date}`.slice(0, 160)); setNotice('Guided itinerary accepted. Saving runs separately; later form edits do not change saved trips.'); setView('day');
   }
   const itinerary = view === 'day' ? accepted : preview;
   const pricePlan = view === 'day' ? acceptedGuide : guideReview;
@@ -193,10 +199,10 @@ function LiveWorkspace({ reset }: { reset: () => void }) {
   const time = (iso: string, trip: LiveItinerary) => formatTime(Date.parse(iso), trip.destination.timezone!);
   return <FestivalSearchContext.Provider value={config?.festivalSearch ?? false}><div className="app-shell live-shell">
     <a href="#main-content" className="skip-link">Skip to planner</a>
-    <aside className="sidebar"><a className="brand" href="#" onClick={event => { event.preventDefault(); setView('plan'); }}><span className="brand-mark"><Compass size={25} /></span>daywise<span className="brand-dot">.</span></a><span className="mobile-brand-note">Your personal<br />travel companion</span><div className="sidebar-caption">GOOD DAYS START<br />WITH A LITTLE CURIOSITY.</div><nav aria-label="Main navigation"><button className={`nav ${view === 'plan' || view === 'places' ? 'active' : ''}`} onClick={() => setView('plan')}><Route size={19} />My day plan</button><button className={`nav ${view === 'saved' ? 'active' : ''}`} onClick={() => void library()}><Bookmark size={19} />Saved plans</button><button className={`nav ${view === 'day' ? 'active' : ''}`} onClick={() => setView('day')}><MapPin size={19} />Follow my day</button></nav><div className="sidebar-inspiration"><Sparkles size={22} /><p>A good day<br />is out there.</p><small>Make it yours.</small></div><div className="sidebar-bottom"><div className="local-profile"><span className="avatar">Y</span><div><b>Your travel space</b><small>Private · this device</small></div></div></div></aside>
+    <aside className="sidebar"><a className="brand" href="#" onClick={event => { event.preventDefault(); setView('plan'); }}><span className="brand-mark"><Compass size={25} /></span>daywise<span className="brand-dot">.</span></a><span className="mobile-brand-note">Your personal<br />travel companion</span><div className="sidebar-caption">GOOD DAYS START<br />WITH A LITTLE CURIOSITY.</div><nav aria-label="Main navigation"><button className="nav" onClick={newTrip} disabled={busy || deleteBusy || saveStatus === 'Saving accepted itinerary to database…'}><Plus size={19} />New itinerary</button><button className={`nav ${view === 'plan' || view === 'places' ? 'active' : ''}`} onClick={() => setView('plan')}><Route size={19} />My day plan</button><button className={`nav ${view === 'saved' ? 'active' : ''}`} onClick={() => void library()}><Bookmark size={19} />Saved plans</button><button className={`nav ${view === 'day' ? 'active' : ''}`} onClick={() => setView('day')}><MapPin size={19} />Follow my day</button></nav><div className="sidebar-inspiration"><Sparkles size={22} /><p>A good day<br />is out there.</p><small>Make it yours.</small></div><div className="sidebar-bottom"><div className="local-profile"><span className="avatar">Y</span><div><b>Your travel space</b><small>Private · this device</small></div></div></div></aside>
     <div className="workspace"><header className="topbar"><div className="breadcrumb">Your travel space <span>/</span><b>{view === 'saved' ? 'Saved plans' : view === 'day' ? 'Accepted route' : view === 'places' ? 'Choose your places' : 'Day planner'}</b></div><span className="connection"><MapPin size={13} />Google locations &amp; routes</span></header><main id="main-content">
       <div className="page-heading"><div><span className="eyebrow">{view === 'saved' ? 'YOUR COLLECTION OF GOOD DAYS' : view === 'day' ? 'A DAY TO MAKE YOUR OWN' : 'A LITTLE PLANNING. MORE EXPLORING.'}</span><h1>{view === 'saved' ? 'Good days, kept close.' : view === 'day' ? 'Your day, all mapped out.' : view === 'places' ? 'Your places. A smarter route.' : 'Your day starts here.'}</h1><p>{view === 'saved' ? 'Your accepted adventures, ready when you are.' : view === 'day' ? 'Your places, your pace. Enjoy the journey.' : 'Make room for a day worth remembering.'}</p>{view === 'plan' && <div className="hero-tags"><span><Compass size={12} />Your pace</span><span><Route size={12} />Your route</span><span><Bookmark size={12} />Your day</span></div>}</div><TravelArtwork /></div>
-      {(hasTrip || !!saveStatus || recovery.error) && <section className="local-trip-tools" aria-label="Local trip saving"><span role="status">{accepted ? saveStatus || 'Accepted itinerary saved on this device' : 'Not saved. Accept an itinerary to save it.'}</span><div className="button-row">{sharedPlan && <button className="button secondary" onClick={() => setSharing(true)}>Share trip</button>}{(accepted || recovery.error) && <button className="text-button" onClick={() => { setDeleteTarget(null); setDeleting(true); }}>Delete local trip</button>}</div></section>}
+      {(hasTrip || !!saveStatus || recovery.error) && <section className="local-trip-tools" aria-label="Local trip saving"><span role="status">{accepted ? saveStatus || 'Accepted itinerary ready' : 'Not saved. Accept an itinerary to save it.'}</span><div className="button-row">{sharedPlan && <button className="button secondary" onClick={() => setSharing(true)}>Share trip</button>}{(accepted || recovery.error) && <button className="text-button" onClick={() => { setDeleteTarget(null); setDeleting(true); }}>Delete local trip</button>}</div></section>}
       {storageError && <div className="error-box" role="alert">{storageError}{!recovery.error && <button className="text-button" onClick={() => setSaveRetry(n => n + 1)}>Retry local saving</button>}</div>}
       {restored && view === 'plan' && <section className="notice"><div><b>Saved trip restored.</b><p>Your selections and itinerary are preserved. Refresh location data before editing routes.</p></div><button className="button secondary" disabled={busy || !destination || !start} onClick={() => void refreshSavedLocations()}>Refresh saved locations</button></section>}
       {accepted && view === 'day' && Date.parse(accepted.route.expiresAt) <= clock && <p className="field-note" role="status">Saved schedule: the original traffic estimate has expired. Your itinerary is preserved; refresh locations and regenerate before relying on updated travel times.</p>}
@@ -224,7 +230,7 @@ function LiveWorkspace({ reset }: { reset: () => void }) {
         {view === 'day' && !accepted && <div className="empty-card"><h2>Accept a route to follow your day.</h2><button className="button primary" onClick={() => setView('plan')}>Back to planner</button></div>}
       </>}
       {sharing && sharedPlan && <Suspense fallback={<p role="status">Preparing trip copy…</p>}><ShareTrip plan={sharedPlan} title={title} allowances={visibleAllowances} close={() => setSharing(false)} /></Suspense>}
-      {deleting && <Dialog title="Delete local trip?" close={() => { if (!deleteBusy) setDeleting(false); }}><p>This removes the selected saved itinerary and its progress and price details from this device. Downloaded or shared copies are independent.</p><div className="button-row"><button className="button secondary" disabled={deleteBusy} onClick={() => setDeleting(false)}>Keep trip</button><button className="button primary" disabled={deleteBusy} onClick={() => void deleteCurrentTrip()}>{deleteBusy ? 'Deleting…' : 'Delete trip from this device'}</button></div></Dialog>}
+      {deleting && <Dialog title="Delete local trip?" close={() => { if (!deleteBusy) setDeleting(false); }}><p>This deletes the selected itinerary, progress and price details from the private database and this device backup. Other itineraries and previously shared/downloaded copies are independent.</p><div className="button-row"><button className="button secondary" disabled={deleteBusy} onClick={() => setDeleting(false)}>Keep trip</button><button className="button primary" disabled={deleteBusy} onClick={() => void deleteCurrentTrip()}>{deleteBusy ? 'Deleting…' : 'Delete trip from this device'}</button></div></Dialog>}
       <footer className="page-footer"><span>Made for wherever your next day takes you. <a href="/privacy.html" target="_blank" rel="noopener noreferrer">Privacy</a> · <a href="/terms.html" target="_blank" rel="noopener noreferrer">Terms</a></span><span>Real locations · Google providers · No location fallbacks</span></footer>
     </main></div>
   </div></FestivalSearchContext.Provider>;

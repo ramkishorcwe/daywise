@@ -1,11 +1,7 @@
-import { z } from 'zod';
 import type { GuidePlan } from '../../../packages/contracts/src/guide';
-
-export const priceCategories = ['tickets', 'food', 'transport', 'parking', 'other'] as const;
+import { priceCategories, priceAllowancesSchema, type PriceAllowances } from '../../../packages/contracts/src/price-allowances';
+export { priceCategories, priceAllowancesSchema, type PriceAllowances };
 export const priceLabels = { tickets: 'Tickets & activities', food: 'Food & drinks', transport: 'Transport', parking: 'Parking & tolls', other: 'Other expenses' };
-const rangeSchema = z.strictObject({ minimum: z.number().finite().nonnegative().max(1e9), maximum: z.number().finite().nonnegative().max(1e9) }).refine(r => r.maximum >= r.minimum, 'Maximum must be at least the minimum.');
-export const priceAllowancesSchema = z.strictObject({ planKey: z.string().max(12000), currency: z.string().regex(/^[A-Z]{3}$/), ranges: z.partialRecord(z.enum(priceCategories), rangeSchema) });
-export type PriceAllowances = z.infer<typeof priceAllowancesSchema>;
 export const pricePlanKey = (plan: GuidePlan) => JSON.stringify([plan.itinerary.route.fetchedAt, plan.itinerary.start.id, plan.itinerary.end.id, plan.stops.map(s => s.locationId), plan.budget]);
 export function tripPrice(plan: GuidePlan, allowances?: PriceAllowances) {
   const extra = allowances?.planKey === pricePlanKey(plan) && allowances.currency === plan.budget.currency ? allowances.ranges : {};

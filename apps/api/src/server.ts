@@ -36,8 +36,11 @@ import type { SharedTripStore } from './shared-trips';
 import { sharedTripSchema, sharedIdSchema } from '../../../packages/contracts/src/shared-trip';
 import { registerFestivalRoutes } from './festivals';
 import type { FestivalSearchProvider } from '../../../packages/data-adapters/src/festival-search';
+import type { AcceptedItineraryStore } from './accepted-itineraries';
+import { acceptedTripSchema } from '../../../packages/contracts/src/accepted-trip';
 
 export interface ServerOptions {
+  itineraries?: AcceptedItineraryStore;
   festivalSearch?: FestivalSearchProvider;
   shares?: SharedTripStore;
   receipts?: EvidenceReceipts;
@@ -95,7 +98,7 @@ export async function createServer(options: ServerOptions) {
         : 'This browser origin is not allowed.');
     }
     if (origin) { reply.header('Access-Control-Allow-Origin', origin); reply.header('Vary', 'Origin'); }
-    if (request.method === 'OPTIONS') return reply.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, Idempotency-Key').header('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS').code(204).send();
+    if (request.method === 'OPTIONS') return reply.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, Idempotency-Key').header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS').code(204).send();
     const path = request.url.split('?')[0];
     if (path === '/api/ops/status') { requireOperator(options.operatorToken, request.headers.authorization, request.ip, origin); return; }
     if (path === '/api/health' || path === '/api/dev/session' || path === '/api/readiness' || path === '/api/locations/config' || (request.method === 'GET' && /^\/api\/shared\/[A-Za-z0-9_-]{43}$/.test(path))) return;
@@ -113,6 +116,16 @@ export async function createServer(options: ServerOptions) {
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'The server could not complete this request.' }, requestId: request.id });
   });
   const owner = (request: FastifyRequest) => owners.get(request)!;
+  const itineraryLimit = (max: number) => ({ rateLimit: { max, timeWindow: '1 minute', hook: 'preHandler' as const, keyGenerator: (request: FastifyRequest) => owner(request) } });
+  const itineraries = () => { if (!options.itineraries) throw new ApiError(503, 'ITINERARIES_NOT_CONFIGURED', 'Database saving is unavailable. Your device backup is preserved; retry when the backend is ready.'); return options.itineraries; };
+  app.get('/api/itineraries', { config: itineraryLimit(120) }, async request => ({ ids: await itineraries().list(owner(request)) }));
+  app.get('/api/itineraries/:id', { config: itineraryLimit(120) }, async request => ({ trip: await itineraries().get(owner(request), idSchema.parse((request.params as { id: string }).id)) }));
+  app.put('/api/itineraries/:id', { bodyLimit: 800_000, config: itineraryLimit(20) }, async request => {
+    const id = idSchema.parse((request.params as { id: string }).id), body = z.strictObject({ trip: acceptedTripSchema, create: z.boolean() }).parse(request.body);
+    if (body.trip.acceptedId !== id) throw new ApiError(400, 'INVALID_ITINERARY_ID', 'The itinerary ID does not match the saved trip.');
+    return { trip: await itineraries().save(owner(request), body.trip, body.create) };
+  });
+  app.delete('/api/itineraries/:id', { config: itineraryLimit(30) }, async request => { await itineraries().delete(owner(request), idSchema.parse((request.params as { id: string }).id)); return { deleted: true }; });
   const sharedStore = () => { if (!options.shares) throw new ApiError(503, 'SHARING_NOT_CONFIGURED', 'Page sharing is available from the deployed Daywise app. Open the public app to create a shareable itinerary link.'); return options.shares; };
   app.post('/api/shared', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => sharedStore().create(owner(request), sharedTripSchema.parse(request.body)));
   app.get('/api/shared/:id', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async request => sharedStore().get(sharedIdSchema.parse((request.params as { id: string }).id)));

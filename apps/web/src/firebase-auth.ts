@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'firebase/app';
-import { browserSessionPersistence, getAuth, setPersistence, signInAnonymously, connectAuthEmulator } from 'firebase/auth';
+import { indexedDBLocalPersistence, getAuth, setPersistence, signInAnonymously, connectAuthEmulator } from 'firebase/auth';
 
 let initialized = false;
 export async function connectFirebase(): Promise<() => Promise<string>> {
@@ -9,7 +9,7 @@ export async function connectFirebase(): Promise<() => Promise<string>> {
   const auth = getAuth(app);
   if (!initialized) {
     if (import.meta.env.DEV && import.meta.env.VITE_FIREBASE_AUTH_EMULATOR_URL) connectAuthEmulator(auth, import.meta.env.VITE_FIREBASE_AUTH_EMULATOR_URL, { disableWarnings: false });
-    await setPersistence(auth, browserSessionPersistence); initialized = true;
+    await setPersistence(auth, indexedDBLocalPersistence); initialized = true;
   }
   await auth.authStateReady(); if (!auth.currentUser) await signInAnonymously(auth);
   return async () => { if (!auth.currentUser) throw new Error('Your Firebase session ended. Reconnect.'); return auth.currentUser.getIdToken(); };

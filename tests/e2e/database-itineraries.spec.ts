@@ -1,0 +1,92 @@
+import { expect, test, type Page } from '@playwright/test';
+import { setup } from './helpers/live-guide';
+import { activeAcceptedTrip } from './helpers/accepted-trips';
+const key = 'daywise-live-active-v1';
+async function accept(page: Page) {
+  await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();
+  await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
+}
+const synced = (page: Page) => expect(page.getByText('Accepted itinerary saved to database · ID kept on this device', { exact: true })).toBeVisible();
+test('two explicitly accepted trips keep only ID references locally and load from the backend after clearing the device cache', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const state = await setup(page, true, true);
+  await page.getByLabel('Private day name', { exact: true }).fill('First database itinerary');
+  await accept(page); await synced(page);
+  const first = await activeAcceptedTrip(page);
+  await page.getByRole('button', { name: 'New itinerary', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveValue('');
+  expect(state.inputs).toHaveLength(1);
+  for (const label of ['Destination city', 'Starting location']) {
+    await page.getByRole('combobox', { name: label, exact: true }).fill('search');
+    await page.getByRole('listbox', { name: `${label} suggestions` }).getByRole('button').first().click();
+  }
+  await page.getByLabel('Travel date', { exact: true }).fill(state.inputs[0].date);
+  await page.getByLabel('Private day name', { exact: true }).fill('Second database itinerary');
+  await accept(page); await synced(page);
+  const second = await activeAcceptedTrip(page);
+  expect(first.acceptedId).not.toBe(second.acceptedId);
+  const reference = await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key);
+  expect(reference).toEqual({ version: 2, acceptedId: second.acceptedId, ids: [first.acceptedId, second.acceptedId], pendingIds: [] });
+  expect(JSON.stringify(reference)).not.toContain('itinerary');
+  await page.evaluate(() => new Promise<void>((resolve, reject) => { const open = indexedDB.open('daywise-accepted-trips', 1); open.onerror = () => reject(open.error); open.onsuccess = () => { const db = open.result, tx = db.transaction('trips', 'readwrite'); tx.objectStore('trips').clear(); tx.oncomplete = () => { db.close(); resolve(); }; }; }));
+  const fetched: string[] = []; page.on('response', r => { if (/\/api\/itineraries\/[0-9a-f-]+$/.test(r.url()) && r.request().method() === 'GET' && r.status() === 200) fetched.push(r.url()); });
+  await page.reload();
+  await expect(page.getByRole('region', { name: 'Whole journey map', exact: true })).toBeVisible();
+  expect((await activeAcceptedTrip(page)).title).toBe('Second database itinerary');
+  expect(fetched.some(url => url.endsWith(second.acceptedId))).toBe(true);
+  await page.getByRole('button', { name: 'Saved plans', exact: true }).click();
+  await expect(page.locator('.saved-card')).toHaveCount(2);
+  await page.locator('.saved-card').filter({ hasText: 'First database itinerary' }).getByRole('button', { name: 'Open saved itinerary', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Whole journey map', exact: true })).toBeVisible();
+  expect((await activeAcceptedTrip(page)).accepted).toEqual(first.accepted);
+  await page.getByRole('button', { name: 'Saved plans', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete Second database itinerary', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete trip from this device', exact: true }).click();
+  await expect(page.locator('.saved-card')).toHaveCount(1);
+  expect((await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key)).ids).toEqual([first.acceptedId]);
+  expect(state.inputs).toHaveLength(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+test('database failure preserves the accepted device backup and explicit retry saves the same ID', async ({ page }) => {
+  await setup(page); let blocked = true;
+  await page.route('**/api/itineraries/**', r => r.request().method() === 'PUT' && blocked ? r.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Database temporarily unavailable.' } } }) : r.fallback());
+  await accept(page);
+  await expect(page.getByRole('alert')).toContainText('Database saving failed');
+  const before = await activeAcceptedTrip(page);
+  expect((await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key)).pendingIds).toEqual([before.acceptedId]);
+  await page.reload();
+  await expect(page.getByRole('region', { name: 'Whole journey map', exact: true })).toBeVisible();
+  expect((await activeAcceptedTrip(page)).accepted).toEqual(before.accepted);
+  await expect(page.getByRole('alert')).toContainText('Database saving failed');
+  blocked = false;
+  await page.getByRole('button', { name: 'Retry local saving', exact: true }).click(); await synced(page);
+  expect((await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key)).pendingIds).toEqual([]);
+  expect((await activeAcceptedTrip(page)).acceptedId).toBe(before.acceptedId);
+  await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(1);
+  await page.route('**/api/itineraries/**', r => r.request().method() === 'DELETE' ? r.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Deletion unavailable.' } } }) : r.fallback());
+  await page.getByRole('button', { name: `Delete ${before.title}`, exact: true }).click();
+  await page.getByRole('button', { name: 'Delete trip from this device', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('could not be deleted');
+  expect((await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key)).ids).toContain(before.acceptedId);
+  expect((await activeAcceptedTrip(page)).acceptedId).toBe(before.acceptedId);
+});
+test('legacy accepted snapshots migrate without losing either trip or uploading an unaccepted draft', async ({ page }) => {
+  await setup(page); await accept(page); await synced(page);
+  const original = await activeAcceptedTrip(page);
+  const ids = await page.evaluate(async ({ key, original }) => {
+    const session = JSON.parse(sessionStorage.getItem('daywise-api-session')!);
+    await fetch(`/api/itineraries/${original.acceptedId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${session.token}` } });
+    const first = { ...original, acceptedId: crypto.randomUUID(), title: 'Legacy accepted one' }, second = { ...original, acceptedId: crypto.randomUUID(), title: 'Legacy accepted two' };
+    await new Promise<void>((resolve, reject) => { const open = indexedDB.open('daywise-accepted-trips', 1); open.onerror = () => reject(open.error); open.onsuccess = () => { const db = open.result, tx = db.transaction('trips', 'readwrite'), store = tx.objectStore('trips'); store.clear(); store.put(first); store.put(second); tx.oncomplete = () => { db.close(); resolve(); }; }; });
+    localStorage.setItem(key, JSON.stringify(first));
+    return [first.acceptedId, second.acceptedId];
+  }, { key, original });
+  await page.reload(); await synced(page);
+  await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(2);
+  const refs = await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key);
+  expect(refs.version).toBe(2); expect(refs.ids.sort()).toEqual(ids.sort()); expect(refs.pendingIds).toEqual([]); expect(refs.accepted).toBeUndefined();
+  const backendIds = await page.evaluate(async () => { const session = JSON.parse(sessionStorage.getItem('daywise-api-session')!); return (await (await fetch('/api/itineraries', { headers: { Authorization: `Bearer ${session.token}` } })).json()).ids; });
+  expect(backendIds.sort()).toEqual(ids.sort());
+});

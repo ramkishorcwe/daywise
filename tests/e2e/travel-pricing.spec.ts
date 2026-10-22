@@ -1,3 +1,4 @@
+import { activeAcceptedTrip } from './helpers/accepted-trips';
 import { expect, test } from '@playwright/test';
 import { setup } from './helpers/live-guide';
 
@@ -18,7 +19,7 @@ test('rounded admission and meal prices agree across review, budget, share and r
   const copy = page.getByRole('textbox', { name: 'Trip sharing preview', exact: true }); await expect(copy).toHaveValue(/Food per person: ₹300\.00 – ₹600\.00/); await expect(copy).toHaveValue(/foreign INR 1200/);
   await page.getByRole('checkbox', { name: 'Include price summary', exact: true }).uncheck(); await expect(copy).not.toHaveValue(/Food per person:|Admission:|Group price estimate:|foreign INR/);
   await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('daywise-live-active-v1')!).acceptedGuide.budget.breakdown.food.maximum)).toBe(1200);
+  await expect.poll(() => activeAcceptedTrip(page).then(trip => trip.acceptedGuide.budget.breakdown.food.maximum)).toBe(1200);
   await page.route('**/api/**', r => r.abort()); await page.reload(); await expect(review).toContainText('₹450 midpoint allowance'); await expect(page.getByTestId('trip-price-range')).toHaveText(before!);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); await page.screenshot({ path: 'artifacts/pricing-mobile.png', fullPage: true });
 });

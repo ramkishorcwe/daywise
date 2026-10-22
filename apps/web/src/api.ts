@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { assistantReplySchema, type Proposal } from '../../../packages/contracts/src/assistant';
 import { readinessSchema } from '../../../packages/contracts/src/readiness';
 import { rememberEvidence, attachEvidence, clearEvidence } from './evidence-cache';
+import { openDB } from 'idb';
 
 let token: string | null = null;
 let refreshToken: (() => Promise<string>) | null = null;
@@ -20,7 +21,7 @@ export async function request<T>(path: string, init: RequestInit = {}, authentic
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   const timedOut = () => new HttpError(408, 'REQUEST_TIMEOUT', `${path === '/guide/compare' ? 'Plan comparison' : path === '/guide/plan' ? 'Itinerary planning' : path === '/guide/discover' ? 'Attraction discovery' : 'The request'} took longer than ${milliseconds / 1000} seconds. Retry when ready; no automatic retry was sent. Your accepted trip is preserved.`);
   let response: Response;
-  try { response = await fetch(`/api${path}`, { ...init, ...(typeof init.body === 'string' ? { body: attachEvidence(init.body) } : {}), headers, signal }); }
+  try { response = await fetch(`/api${path}`, { ...init, ...(typeof init.body === 'string' && !path.startsWith('/itineraries') ? { body: attachEvidence(init.body) } : {}), headers, signal }); }
   catch (error) { if (init.signal?.aborted) throw error; if (timeout.aborted) throw timedOut(); throw new Error(import.meta.env.DEV ? 'The backend is unavailable. Start it with npm run dev:api, then retry.' : 'Daywise could not reach its server. Check your connection and retry; your saved trip is preserved.'); }
   let data: unknown; try { data = await response.json(); } catch (error) { if (init.signal?.aborted) throw error; if (timeout.aborted) throw timedOut(); throw new Error('The backend returned an unreadable response.'); }
   if (!response.ok) { const failure = data as { error?: { code?: string; message?: string } }; throw new HttpError(response.status, failure.error?.code ?? 'REQUEST_FAILED', failure.error?.message ?? 'The request failed.'); }
@@ -41,10 +42,16 @@ export async function connectBackend(): Promise<ApiCapabilities> {
   const status = await capabilities();
   if (status.authMode === 'local') {
     let existing: { token: string; expiresAt: string } | null = null;
-    try { existing = JSON.parse(sessionStorage.getItem('daywise-api-session') ?? 'null'); } catch { /* unavailable session storage: use memory */ }
+    try {
+      existing = JSON.parse(sessionStorage.getItem('daywise-api-session') ?? 'null');
+      if (!existing) { const db = await openDB('daywise-development-auth', 1, { upgrade(db) { db.createObjectStore('session'); } }); try { existing = await db.get('session', 'current'); } finally { db.close(); } }
+    } catch { /* unavailable storage: use memory */ }
     if (existing && Date.parse(existing.expiresAt) > Date.now()) token = existing.token;
     if (token) { try { await request('/trips'); } catch { token = null; } }
-    if (!token) { const session = z.strictObject({ token: z.string(), expiresAt: z.iso.datetime() }).parse(await request('/dev/session', { method: 'POST' }, false)); token = session.token; try { sessionStorage.setItem('daywise-api-session', JSON.stringify(session)); } catch { /* in-memory session still works */ } }
+    if (!token) {
+      const session = z.strictObject({ token: z.string(), expiresAt: z.iso.datetime() }).parse(await request('/dev/session', { method: 'POST' }, false)); token = session.token;
+      try { sessionStorage.setItem('daywise-api-session', JSON.stringify(session)); const db = await openDB('daywise-development-auth', 1, { upgrade(db) { db.createObjectStore('session'); } }); try { await db.put('session', session, 'current'); } finally { db.close(); } } catch { /* in-memory session still works */ }
+    }
   } else {
     const { connectFirebase } = await import('./firebase-auth'); refreshToken = await connectFirebase(); token = await refreshToken();
   }

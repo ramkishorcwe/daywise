@@ -1,3 +1,4 @@
+import { activeAcceptedTrip } from './helpers/accepted-trips';
 import { expect, test } from '@playwright/test';
 import { setup } from './helpers/live-guide';
 
@@ -36,7 +37,7 @@ test('category browsing and edits never plan; chosen visits optimize explicitly 
   await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();
   await page.getByRole('button', { name: 'Accept my chosen itinerary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
-  const saved = await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key);
+  const saved = await activeAcceptedTrip(page);
   expect(saved.acceptedGuide.itinerary.stops).toHaveLength(3); expect(saved.guideSaved.stops).toHaveLength(2); expect(saved.guideSaved.stops.every((s: { mustVisit: boolean }) => s.mustVisit)).toBe(true);
   await page.reload(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Provider Museum');
 });
@@ -69,7 +70,7 @@ test('provider failures are actionable and a failed optimization does not replac
   await page.getByRole('button', { name: 'museums', exact: true }).click(); await expect(page.getByRole('alert')).toContainText('Retry category lookup');
   await page.unroute('**/api/guide/discover');
   // Restore only this provider mock; no paid requests are made by this test.
-  const candidate = (await page.evaluate(k => JSON.parse(localStorage.getItem(k)!).acceptedGuide, key));
+  const candidate = ((await activeAcceptedTrip(page)).acceptedGuide);
   await page.route('**/api/guide/discover', r => r.fulfill({ json: { candidates: candidate.itinerary.stops.map((s: { location: unknown; durationMinutes: number }, i: number) => ({ location: s.location, suggestedMinutes: s.durationMinutes, facts: candidate.stops[i].facts, score: 1, reasons: [] })), warnings: [], assistantMode: 'local' } }));
   await page.getByRole('button', { name: 'Refresh category', exact: true }).click(); await page.getByRole('button', { name: 'Add Provider Museum', exact: true }).click();
   await page.route('**/api/guide/plan', r => r.fulfill({ status: 422, json: { error: { code: 'GUIDE_INFEASIBLE', message: 'All chosen visits cannot fit. Extend your trip or remove a place.' } } }));

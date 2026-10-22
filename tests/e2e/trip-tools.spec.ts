@@ -1,7 +1,8 @@
+import { activeAcceptedTrip } from './helpers/accepted-trips';
 import { expect, test, type Page } from '@playwright/test';
 import { setup } from './helpers/live-guide';
 const key = 'daywise-live-active-v1';
-const savedTrip = (page: Page) => page.evaluate(k => JSON.parse(localStorage.getItem(k) ?? 'null'), key);
+const savedTrip = activeAcceptedTrip;
 async function generate(page: Page) {
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible();
@@ -100,7 +101,7 @@ test('malformed local data is preserved until explicit deletion', async ({ page 
 });
 test('expired saved estimates remain readable and cannot be silently accepted as fresh', async ({ page }) => {
   await setup(page); await generate(page); await accept(page);
-  await page.evaluate(k => { const trip = JSON.parse(localStorage.getItem(k)!); for (const t of [trip.preview, trip.accepted, trip.guideReview?.itinerary, trip.acceptedGuide?.itinerary]) if (t) t.route.expiresAt = new Date(Date.now() - 1000).toISOString(); localStorage.setItem(k, JSON.stringify(trip)); }, key);
+  await page.evaluate(({ k, trip }) => { for (const t of [trip.preview, trip.accepted, trip.guideReview?.itinerary, trip.acceptedGuide?.itinerary]) if (t) t.route.expiresAt = new Date(Date.now() - 1000).toISOString(); localStorage.setItem(k, JSON.stringify(trip)); }, { k: key, trip: await activeAcceptedTrip(page) });
   await page.reload(); await expect(page.getByText(/original traffic estimate has expired/)).toBeVisible(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Provider Museum');
   await expect(page.locator('[data-map-rendered=true]')).toBeVisible();
   await page.getByRole('button', { name: /My day plan/ }).click(); await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { setup } from './helpers/live-guide';
-import { savedAcceptedTrips } from './helpers/accepted-trips';
+import { activeAcceptedTrip, savedAcceptedTrips } from './helpers/accepted-trips';
 const key = 'daywise-live-active-v1';
 async function accept(page: import('@playwright/test').Page) {
   await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();
@@ -13,8 +13,7 @@ for (const destinationMode of ['starting_city', 'custom']) {
     const state = await setup(page);
     await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
     await accept(page);
-    const endpoints = await page.evaluate(async ({ key, destinationMode }) => {
-      const value = JSON.parse(localStorage.getItem(key)!);
+    const endpoints = await page.evaluate(async ({ key, destinationMode, value }) => {
       value.destinationMode = destinationMode;
       localStorage.setItem(key, JSON.stringify(value));
       await new Promise<void>((resolve, reject) => {
@@ -28,16 +27,13 @@ for (const destinationMode of ['starting_city', 'custom']) {
         };
       });
       return { destination: value.accepted.destination, start: value.accepted.start, end: value.accepted.end };
-    }, { key, destinationMode });
+    }, { key, destinationMode, value: await activeAcceptedTrip(page) });
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'My day plan', exact: true }).click();
     await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toBeVisible();
     await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toBeVisible();
-    expect(await page.evaluate(k => {
-      const value = JSON.parse(localStorage.getItem(k)!);
-      return { destination: value.accepted.destination, start: value.accepted.start, end: value.accepted.end };
-    }, key)).toEqual(endpoints);
+    const restored = await activeAcceptedTrip(page); expect({ destination: restored.accepted.destination, start: restored.accepted.start, end: restored.accepted.end }).toEqual(endpoints);
     expect(state.inputs).toHaveLength(1);
     await page.getByRole('button', { name: 'Saved plans', exact: true }).click();
     await expect(page.locator('.saved-card')).toHaveCount(1);
@@ -90,7 +86,8 @@ test('reaccepting the same itinerary does not duplicate it; accepting a new trip
 });
 test('an old unaccepted auto-saved draft is not shown as a saved itinerary', async ({ page }) => {
   await setup(page); await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await accept(page);
-  await page.evaluate(k => { const raw = JSON.parse(localStorage.getItem(k)!); raw.accepted = null; raw.acceptedGuide = null; raw.acceptedId = null; localStorage.setItem(k, JSON.stringify(raw)); }, key);
+  const legacy = await activeAcceptedTrip(page);
+  await page.evaluate(async ({ key, raw }) => { const session = JSON.parse(sessionStorage.getItem('daywise-api-session')!); await fetch(`/api/itineraries/${raw.acceptedId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${session.token}` } }); raw.accepted = null; raw.acceptedGuide = null; raw.acceptedId = null; localStorage.setItem(key, JSON.stringify(raw)); }, { key, raw: legacy });
   // Keep the legacy draft on disk while removing this test's accepted library record.
   await page.evaluate(() => new Promise<void>((resolve, reject) => { const opening = indexedDB.open('daywise-accepted-trips', 1); opening.onerror = () => reject(opening.error); opening.onsuccess = () => { const db = opening.result, tx = db.transaction('trips', 'readwrite'); tx.objectStore('trips').clear(); tx.oncomplete = () => { db.close(); resolve(); }; }; }));
   await page.reload(); await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveValue('');
