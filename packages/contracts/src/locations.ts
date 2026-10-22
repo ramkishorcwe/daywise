@@ -5,6 +5,8 @@ import { coordinateSchema, routeEstimateSchema } from './api';
 // remain bounded by the server body limit; valid long IDs must not be truncated.
 export const providerPlaceId = z.string().regex(/^[A-Za-z0-9_-]{5,}$/);
 export const cityIdentitySchema = z.strictObject({ placeId: providerPlaceId, name: z.string().trim().min(1).max(300), countryCode: z.string().regex(/^[A-Z]{2}$/) });
+export const cityViewportSchema = z.object({ low: coordinateSchema, high: coordinateSchema }).refine(v => v.low.latitude < v.high.latitude && v.low.longitude !== v.high.longitude, 'Google city viewport must have a nonempty area.');
+export type CityViewport = z.infer<typeof cityViewportSchema>;
 export const locationSchema = z.strictObject({
   receipt: z.string().regex(/^[A-Za-z0-9_-]{40,50000}$/).optional(),
   id: z.string().uuid(), placeId: providerPlaceId.nullable(), provider: z.enum(['google', 'device']), source: z.enum(['search', 'gps', 'pin', 'saved']),

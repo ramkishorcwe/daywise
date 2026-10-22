@@ -10,6 +10,7 @@ import { createServer } from '../apps/api/src/server';
 import { localAuthenticator } from '../apps/api/src/auth';
 import { LocalTripStore } from '../apps/api/src/store';
 import { zonedTime } from '../packages/domain/src/time';
+import { withinChosenCity } from '../packages/domain/src/chosen-city';
 import type { FastifyInstance } from 'fastify';
 import { EvidenceReceipts } from '../apps/api/src/receipts';
 
@@ -103,6 +104,27 @@ it('considers the full bounded shortlist, including an affordable eighth candida
 it('honors visited, wheelchair and child suitability constraints without inventing evidence', () => { const cs = [candidate(1), candidate(2)], body = input(cs); body.preferences.mobility = 'wheelchair'; cs[0].facts.accessible = false; cs[1].facts.accessible = true; body.preferences.visitedPlaceIds = [cs[0].location.placeId!]; expect(chooseGuideOrder(body, location(), cs, matrix(2)).order[0].locationId).toBe(cs[1].location.id); body.preferences.mobility = 'standard'; body.preferences.visitedPlaceIds = []; body.preferences.childAges = [7]; cs[0].facts.goodForChildren = false; cs[1].facts.goodForChildren = true; expect(chooseGuideOrder(body, location(), cs, matrix(2)).order.map(s => s.locationId)).toEqual([cs[1].location.id]); expect(candidateScore(cs[1], body.preferences).score).toBeGreaterThan(candidateScore(cs[0], body.preferences).score); });
 it('supports unknown hours honestly while rejecting a closed day and malformed cost ranges', () => { const cs = [candidate(1)], body = input(cs); cs[0].facts.hours.status = 'unknown'; cs[0].facts.hours.windows = []; expect(chooseGuideOrder(body, location(), cs, matrix(1)).order).toHaveLength(1); expect(guidePlanRequestSchema.safeParse({ ...body, stops: [{ ...body.stops[0], costEstimate: { minimum: 10, maximum: 5, currency: 'USD', basis: 'person' } }] }).success).toBe(false); });
 const rawPlace = (id: string): GuidePlace => { const calendar = { year: Number(date.slice(0, 4)), month: Number(date.slice(5, 7)), day: Number(date.slice(8)) }; const weekday = new Date(date + 'T12:00:00Z').getUTCDay(); return { id, displayName: { text: 'Provider museum' }, formattedAddress: 'Provider address', location: { latitude: 51.01, longitude: 0 }, types: ['museum'], currentOpeningHours: { periods: [{ open: { date: calendar, day: weekday, hour: 9, minute: 0 }, close: { date: calendar, day: weekday, hour: 18, minute: 0 } }] } }; };
+it('chosen city area accepts municipal subdivisions but excludes other cities, unknown countries and points outside the provider viewport', () => {
+  const destination = location(), subdivision = { ...location(2), city: { ...city, placeId: 'provider-municipal-part', name: 'City municipal part' } };
+  const viewport = { low: { latitude: 50.9, longitude: -.1 }, high: { latitude: 51.1, longitude: .1 } };
+  expect(withinChosenCity(subdivision, destination, viewport)).toBe(true);
+  expect(withinChosenCity({ ...subdivision, coordinates: { latitude: 52, longitude: 0 } }, destination, viewport)).toBe(false);
+  expect(withinChosenCity({ ...subdivision, city: { ...city, countryCode: 'US' } }, destination, viewport)).toBe(false);
+  expect(withinChosenCity({ ...subdivision, city: null }, destination, viewport)).toBe(false);
+  expect(withinChosenCity(subdivision, destination, null)).toBe(false);
+  expect(withinChosenCity(location(1), destination, null)).toBe(true);
+  const wrap = { low: { latitude: -20, longitude: 170 }, high: { latitude: -10, longitude: -170 } };
+  expect(withinChosenCity({ ...location(), coordinates: { latitude: -15, longitude: 179 } }, destination, wrap)).toBe(true);
+  expect(withinChosenCity({ ...location(), coordinates: { latitude: -15, longitude: 0 } }, destination, wrap)).toBe(false);
+});
+it('Google city viewport requests only provider identity and geometry and rejects incomplete geometry', async () => {
+  const viewport = { low: { latitude: 50.9, longitude: -.1 }, high: { latitude: 51.1, longitude: .1 } };
+  const request = vi.fn<typeof fetch>(async () => Response.json({ id: 'provider-city', viewport }));
+  expect(await new GoogleGuidePlaces('test-key', request).cityViewport('provider-city')).toEqual(viewport);
+  expect((request.mock.calls[0][1]!.headers as Record<string, string>)['X-Goog-FieldMask']).toBe('id,viewport');
+  expect(await new GoogleGuidePlaces('test-key', async () => Response.json({ id: 'provider-city' })).cityViewport('provider-city')).toBeNull();
+  await expect(new GoogleGuidePlaces('test-key', async () => Response.json({ id: 'provider-city', viewport: { low: { latitude: 0, longitude: 0 } } })).cityViewport('provider-city')).rejects.toThrow('city map area');
+});
 it('uses dated Google opening periods, recognizes closure, and leaves missing hours unknown', () => { const raw = rawPlace('provider-raw-place'); expect(openingWindows(raw, date, 'UTC').status).toBe('date_specific'); expect(openingWindows({ ...raw, currentOpeningHours: { periods: [] } }, date, 'UTC').status).toBe('closed'); expect(openingWindows({ ...raw, currentOpeningHours: undefined }, date, 'UTC').status).toBe('unknown'); });
 it('deduplicates discovery, excludes permanently closed and unlocated results, and requests actual facts', async () => { const raw = rawPlace('provider-raw-place'), request = vi.fn<typeof fetch>(async () => Response.json({ places: [raw, raw, { ...raw, id: 'closed-provider-place', businessStatus: 'CLOSED_PERMANENTLY' }, { ...raw, id: 'unlocated-provider-place', location: undefined }] })); const result = await new GoogleGuidePlaces('mock-key', request).discover('Provider city', { latitude: 51, longitude: 0 }, preferences()); expect(result).toHaveLength(1); const options = request.mock.calls[0][1]!; expect(JSON.parse(options.body as string).textQuery).toContain('Provider city'); expect(JSON.stringify(options.headers)).toContain('currentOpeningHours'); });
 it('provider discovery failure is actionable and never returns sample attractions', async () => { await expect(new GoogleGuidePlaces('mock-key', async () => new Response('', { status: 403 })).discover('Provider city', { latitude: 51, longitude: 0 }, preferences())).rejects.toThrow('Google rejected'); });
@@ -269,6 +291,51 @@ async function api(extra: Partial<Parameters<typeof createServer>[0]> = {}, prof
   const body = input(candidates.length ? candidates : [candidate(999)]); body.destinationId = destination.id; body.startId = destination.id; body.preferences = profile;
   return { app, post, body, candidates, auth, token, matrixCall, routeCall, discovery };
 }
+async function cityScopedApi(outsideCount = 1) {
+  const p = preferences(); p.interests = ['museums']; p.useAI = false;
+  const outside = { ...rawPlace('provider-outside-city'), location: { latitude: 52, longitude: 0 }, displayName: { text: 'Distant Fort' }, rating: 5, userRatingCount: 100000 };
+  const local = { ...rawPlace('provider-municipal-museum'), location: { latitude: 51.02, longitude: 0 }, displayName: { text: 'Municipal Museum' } };
+  const cityViewport = vi.fn(async () => ({ low: { latitude: 50.9, longitude: -.1 }, high: { latitude: 51.1, longitude: .1 } }));
+  const facts = vi.fn(async (id: string) => id === local.id ? local : outside);
+  const a = await api({ guide: { discover: async () => [...Array.from({ length: outsideCount }, (_, i) => ({ ...outside, id: `${outside.id}-${i}` })), local], facts, cityViewport }, locations: {
+    autocomplete: async () => ({ provider: 'google', suggestions: [] }),
+    details: async id => ({ placeId: id, name: 'Provider city', address: 'Provider address', coordinates: { latitude: 51, longitude: 0 }, types: ['locality'] }),
+    reverse: async coordinates => ({ ...location(), coordinates, city: coordinates.latitude === 52 ? { ...city, placeId: 'different-provider-city', name: 'Distant City' } : coordinates.latitude === 51.02 ? { ...city, placeId: 'municipal-provider-city', name: 'City Municipal Part' } : city }),
+    timezone: async () => 'UTC',
+  } }, p);
+  return { ...a, cityViewport, facts, local, outside };
+}
+it('chosen browsing filters outside cities before shortlisting; ordinary discovery remains unchanged and does not fetch city geometry', async () => {
+  const a = await cityScopedApi(); expect(a.discovery.statusCode).toBe(200); expect(a.candidates).toHaveLength(2); expect(a.cityViewport).not.toHaveBeenCalled();
+  const discovery = await a.post('/api/guide/discover', { destinationId: a.body.destinationId, date, preferences: a.body.preferences, chosenPlaces: true });
+  expect(discovery.statusCode, discovery.body).toBe(200); expect(discovery.json().candidates.map((c: GuideCandidate) => c.location.name)).toEqual(['Municipal Museum']);
+  expect(a.cityViewport).toHaveBeenCalledTimes(1);
+  const candidate = discovery.json().candidates[0] as GuideCandidate;
+  const response = await a.post('/api/guide/plan', { ...a.body, preferences: { ...a.body.preferences, interests: [] }, chosenPlaces: true, stops: [{ ...choice(candidate), mustVisit: true, durationMinutes: 90, durationSource: 'user' }] });
+  expect(response.statusCode, response.body).toBe(200); expect(response.json().itinerary.stops).toHaveLength(1); expect(response.json().itinerary.stops[0].durationMinutes).toBe(90);
+  expect(a.cityViewport).toHaveBeenCalledTimes(1); // Provider geometry is bounded and briefly cached, not fetched for every edit.
+});
+it('out-of-city results cannot crowd an in-city result out of the first eight returned candidates', async () => {
+  const a = await cityScopedApi(8); expect(a.candidates).toHaveLength(8); expect(a.candidates.every(c => c.location.name === 'Distant Fort')).toBe(true);
+  const response = await a.post('/api/guide/discover', { destinationId: a.body.destinationId, date, preferences: a.body.preferences, chosenPlaces: true });
+  expect(response.statusCode, response.body).toBe(200); expect(response.json().candidates.map((c: GuideCandidate) => c.location.name)).toEqual(['Municipal Museum']);
+});
+it('an old out-of-city choice is rejected by name before matrix/route calls, rather than reporting a time or budget error', async () => {
+  const a = await cityScopedApi(), outside = a.candidates.find(c => c.location.name === 'Distant Fort')!;
+  const response = await a.post('/api/guide/plan', { ...a.body, chosenPlaces: true, stops: [{ ...choice(outside), mustVisit: true, durationMinutes: 90, durationSource: 'user' }] });
+  expect(response.statusCode).toBe(422); expect(response.json().error).toMatchObject({ code: 'CHOSEN_PLACE_CITY', message: expect.stringContaining('Distant Fort (Distant City)') });
+  expect(response.json().error.message).toContain('selected city area'); expect(a.matrixCall).not.toHaveBeenCalled(); expect(a.routeCall).not.toHaveBeenCalled();
+  const added = await a.post('/api/guide/candidate', { destinationId: a.body.destinationId, date, preferences: a.body.preferences, locationId: outside.location.id, chosenPlaces: true });
+  expect(added.statusCode).toBe(422); expect(added.json().error.code).toBe('CHOSEN_PLACE_CITY'); expect(a.facts).not.toHaveBeenCalled();
+});
+it('city scope failure never falls back to country-wide discovery', async () => {
+  const p = preferences(); p.useAI = false;
+  const discover = vi.fn(async () => [rawPlace('provider-visit-one')]);
+  const a = await api({ guide: { discover, facts: async id => rawPlace(id), cityViewport: async () => { throw new ProviderError('UNAVAILABLE', 'City geometry lookup failed. Retry.'); } } }, p);
+  expect(discover).toHaveBeenCalledTimes(1);
+  const response = await a.post('/api/guide/discover', { destinationId: a.body.destinationId, date, preferences: p, chosenPlaces: true });
+  expect(response.statusCode).toBe(502); expect(response.json().error.message).toContain('City geometry lookup failed'); expect(discover).toHaveBeenCalledTimes(1);
+});
 it('chosen-place API preserves all chosen visits, bypasses Gemini and fails rather than dropping an infeasible visit', async () => {
   const rankGuide = vi.fn(async () => ({ rankedIds: [], interests: [] }));
   const p = preferences(); p.interests = []; p.useAI = false;

@@ -160,7 +160,7 @@ export function guideStyleStops(stops: GuideStop[], style: GuidePlanStyle): Guid
     return { ...stop, baseDurationMinutes: base, durationMinutes: style === 'relaxed' ? Math.min(240, Math.ceil(base * 1.25 / 5) * 5) : base };
   });
 }
-export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedLocation, candidates: GuideCandidate[], matrix: TravelMatrix, ranking: string[] = [], now = Date.now(), banned = new Set<string>(), maxVisits = 5, style?: GuidePlanStyle, aiVisits?: string[]) {
+export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedLocation, candidates: GuideCandidate[], matrix: TravelMatrix, ranking: string[] = [], now = Date.now(), banned = new Set<string>(), maxVisits = 5, style?: GuidePlanStyle, aiVisits?: string[], chosenCityVerified = false) {
   const p = input.preferences;
   const timing: Timing = { ...liveDeparture(input, destination, now), lunchStart: zonedTime(input.date, '13:00', destination.timezone!), eveningStart: zonedTime(input.date, '18:00', destination.timezone!), appointments: new Map(input.stops.filter(s => s.preferredTime).map(s => [s.locationId, zonedTime(input.date, s.preferredTime!, destination.timezone!)])) };
   const bands = { morning: [zonedTime(input.date, '06:00', destination.timezone!), zonedTime(input.date, '12:00', destination.timezone!)], afternoon: [zonedTime(input.date, '12:00', destination.timezone!), zonedTime(input.date, '16:00', destination.timezone!)], evening: [zonedTime(input.date, '16:00', destination.timezone!), zonedTime(input.date, '21:00', destination.timezone!)] };
@@ -176,7 +176,9 @@ export function chooseGuideOrder(input: GuidePlanRequest, destination: SelectedL
   for (const order of input.orderMode === 'manual' ? [pool] : sequences(pool)) {
     if (order.length > maxVisits) continue;
     // Comparison styles change priorities, never the user's visit allowances or constraints.
-    if (banned.has(order.map(s => s.locationId).join(':')) || !order.some(s => candidates.find(c => c.location.id === s.locationId)?.location.city?.placeId === destination.city?.placeId)) continue;
+    // Only the chosen-place API can supply city-area verification. Other flows
+    // retain the original canonical-locality requirement.
+    if (banned.has(order.map(s => s.locationId).join(':')) || (!(input.chosenPlaces && chosenCityVerified) && !order.some(s => candidates.find(c => c.location.id === s.locationId)?.location.city?.placeId === destination.city?.placeId))) continue;
     if (input.stops.some((s, i) => (s.mustVisit && !order.includes(s)) || (s.locked && order[i]?.locationId !== s.locationId))) continue;
     const legs = legsFor(order); if (legs.some(l => !l)) continue; evaluated++;
     const schedule = scheduleGuide(order, candidates, input, destination, legs as NonNullable<TravelMatrix[0][0]>[], now, timing); if (!schedule) continue;

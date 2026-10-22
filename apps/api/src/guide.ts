@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { mealKinds, guideDiscoverSchema, guideCandidateRequestSchema, guidePlanRequestSchema, candidateSchema, guideDiscoverySchema, guidePlanSchema, guideRankingSchema, guideComparisonSchema, guidePlanStyles, type GuideComparison, type GuidePlanStyle, type GuideCandidate, type GuidePreferences, type GuidePlanRequest, type GuideStop, type TravelMatrix } from '../../../packages/contracts/src/guide';
-import { startMatchesDestination, type SelectedLocation, type LiveRoute } from '../../../packages/contracts/src/locations';
+import { startMatchesDestination, type SelectedLocation, type LiveRoute, type CityViewport } from '../../../packages/contracts/src/locations';
+import { withinChosenCity } from '../../../packages/domain/src/chosen-city';
 import { candidateScore, suggestedVisitMinutes, chooseGuideOrder, guideStyleStops, guideResult, middayMealDue, middayMealRequested, scheduleGuide, guidePreferenceIssue, balanceGuideShortlist, matchingGuideInterests } from '../../../packages/domain/src/guide-planner';
 import { liveDeparture } from '../../../packages/domain/src/live-itinerary';
 import { factsFor, type GuidePlacesProvider, type GuidePlace } from '../../../packages/data-adapters/src/google-guide';
@@ -33,9 +34,21 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
   const rates = options.pricingRates ?? new FrankfurterRates();
   const price = async (c: GuideCandidate, p: GuidePreferences) => { try { return await pricedCandidate(c, p, rates); } catch { throw new ApiError(503, 'PRICE_CONVERSION_UNAVAILABLE', 'The exchange rate needed for admission and food prices is unavailable. Retry, or select INR and choose the visitor category explicitly. Your accepted trip is preserved.'); } };
   const records = new Map<string, { owner: string; date: string; candidate: GuideCandidate }>();
+  const cityAreas = new Map<string, { expires: number; viewport: CityViewport | null }>();
   const cleanup = () => { for (const [id, row] of records) if (Date.parse(row.candidate.location.expiresAt) <= Date.now()) records.delete(id); };
-  const timer = setInterval(cleanup, 60000); timer.unref(); app.addHook('onClose', async () => { clearInterval(timer); records.clear(); });
+  const timer = setInterval(cleanup, 60000); timer.unref(); app.addHook('onClose', async () => { clearInterval(timer); records.clear(); cityAreas.clear(); });
   const provider = (): GuidePlacesProvider => { if (!options.guide || !options.locations) throw new ApiError(503, 'GUIDE_NOT_CONFIGURED', 'Configure Places API (New), Geocoding and Time Zone server keys for guide discovery.'); return options.guide; };
+  async function cityArea(destination: SelectedLocation) {
+    const source = provider(), id = destination.placeId!;
+    if (!source.cityViewport) return null;
+    const cached = cityAreas.get(id); if (cached && cached.expires > Date.now()) return cached.viewport;
+    await guard.consume(); const viewport = await source.cityViewport(id);
+    if (cityAreas.size >= 100) cityAreas.delete(cityAreas.keys().next().value!);
+    cityAreas.set(id, { expires: Date.now() + 10 * 60000, viewport }); return viewport;
+  }
+  function chosenCityError(location: SelectedLocation, destination: SelectedLocation) {
+    return new ApiError(422, 'CHOSEN_PLACE_CITY', `${location.name}${location.city ? ` (${location.city.name})` : ''} is outside or cannot be verified in the selected city area for ${destination.name}. Remove it and refresh the category, or select its city in the day planner. No route was generated and no visit was silently removed.`);
+  }
   const destinationFor = (who: string, id: string) => { const destination = locations.get(who, id); if (!destination.city || !destination.timezone || destination.source !== 'search') throw new ApiError(422, 'DESTINATION_UNRESOLVED', 'Select a validated destination city first.'); return destination; };
   const candidateFor = (who: string, id: string, date: string) => { cleanup(); locations.get(who, id); const row = records.get(id); if (!row || row.owner !== who || row.date !== date) throw new ApiError(409, 'GUIDE_EVIDENCE_EXPIRED', 'Guide evidence expired or belongs to another date. Discover or add this place again.'); return row.candidate; };
   function save(who: string, location: SelectedLocation, raw: GuidePlace, date: string, timezone: string, p: GuidePreferences) {
@@ -113,17 +126,22 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     const body = guideDiscoverSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), source = provider();
     const localToday = new Intl.DateTimeFormat('en-CA', { timeZone: destination.timezone!, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     if (body.date < localToday || Date.parse(body.date) > Date.parse(localToday) + 7 * 86400000) throw new ApiError(422, 'GUIDE_DATE', 'Choose today or a date in the next seven days.');
+    const viewport = body.chosenPlaces ? await cityArea(destination) : null;
     await guard.consume(); const raw = await source.discover(destination.name, destination.coordinates, body.preferences, () => guard.consume()), candidates: GuideCandidate[] = [], warnings: string[] = [];
     const ranked = raw.filter(r => !body.preferences.visitedPlaceIds.includes(r.id)).map(r => ({ raw: r, facts: factsFor(r, body.date, destination.timezone!) })).filter(r => r.facts.categories.length && r.facts.hours.status !== 'closed' && !guidePreferenceIssue(r.facts, body.preferences)).sort((a, b) => candidateScore({ location: destination, facts: b.facts }, body.preferences).score - candidateScore({ location: destination, facts: a.facts }, body.preferences).score);
-    for (const item of balanceGuideShortlist(ranked, body.preferences)) {
+    // Chosen-place browsing validates locality before taking eight results, so
+    // unrelated high-ranked places cannot crowd valid city results out of the list.
+    for (const item of body.chosenPlaces ? ranked.slice(0, 24) : balanceGuideShortlist(ranked, body.preferences)) {
       try {
         await guard.consume(); const reversed = await options.locations!.reverse(item.raw.location);
         if (reversed.city?.countryCode !== destination.city!.countryCode) { warnings.push('A discovery result could not be verified in the destination country and was excluded.'); continue; }
+        if (body.chosenPlaces && !withinChosenCity({ city: reversed.city, coordinates: item.raw.location }, destination, viewport)) continue;
         const location = locations.add(who, { ...reversed, provider: 'google', source: 'search', placeId: item.raw.id, name: item.raw.displayName.text, address: item.raw.formattedAddress, coordinates: item.raw.location, types: item.raw.types, ...(item.raw.attributions ? { attributions: item.raw.attributions } : {}) });
         candidates.push(await price(save(who, location, item.raw, body.date, destination.timezone!, body.preferences), body.preferences));
+        if (body.chosenPlaces && candidates.length === 8) break;
       } catch (error) { if (error instanceof ApiError) throw error; warnings.push('A result could not be location-validated and was excluded. Check Geocoding if this repeats.'); }
     }
-    if (!candidates.length) throw new ApiError(422, 'NO_GUIDE_CANDIDATES', 'No verified places match your selected interests and visit preferences. Change your interests or indoor/outdoor choice, or try another date. Your preferences were not relaxed.');
+    if (!candidates.length) throw new ApiError(422, 'NO_GUIDE_CANDIDATES', body.chosenPlaces ? `No matching places were verified in the selected city area for ${destination.name}. Try another category or search for a place in this city. Out-of-city results were excluded.` : 'No verified places match your selected interests and visit preferences. Change your interests or indoor/outdoor choice, or try another date. Your preferences were not relaxed.');
     const missing = body.preferences.interests.filter(interest => !candidates.some(c => matchingGuideInterests(c.facts, body.preferences).includes(interest)));
     if (missing.length) warnings.push(`No open verified match in the reviewed shortlist for: ${missing.join(', ').replaceAll('_', ' ')}. These interests will be reported as not scheduled; no unrelated place will be substituted.`);
     warnings.push('Only a bounded provider shortlist is reviewed. Ratings indicate popularity; cultural significance, admission and special events may be unknown.');
@@ -132,6 +150,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
   app.post('/api/guide/candidate', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async request => {
     const body = guideCandidateRequestSchema.parse(request.body), who = owner(request), destination = destinationFor(who, body.destinationId), location = locations.get(who, body.locationId);
     if (!location.placeId || location.source !== 'search') throw new ApiError(422, 'GUIDE_PLACE_REQUIRED', 'Search and select a real attraction before adding it to the guide.');
+    if (body.chosenPlaces && !withinChosenCity(location, destination, await cityArea(destination))) throw chosenCityError(location, destination);
     await guard.consume(); const raw = await provider().facts(location.placeId);
     const issue = guidePreferenceIssue(factsFor(raw, body.date, destination.timezone!), body.preferences);
     if (issue) throw new ApiError(422, 'GUIDE_PREFERENCE_MISMATCH', `${location.name} ${issue}. Change your preferences or select a matching place.`);
@@ -147,7 +166,11 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     if (!options.liveRoutes?.matrix) throw new ApiError(503, 'GUIDE_ROUTING_NOT_CONFIGURED', 'Configure Google Routes API for real travel-time comparison.');
     let departure: number; try { departure = liveDeparture(body, destination).departure; } catch (error) { throw new ApiError(422, 'INVALID_DEPARTURE', error instanceof Error ? error.message : 'Invalid departure.'); }
     let candidates = body.stops.map(s => candidateFor(who, s.locationId, body.date));
-    if (body.chosenPlaces && candidates.some(c => !c.location.city || c.location.city.countryCode !== destination.city?.countryCode)) throw new ApiError(422, 'CHOSEN_PLACE_COUNTRY', 'Choose visits in the destination country. Check their addresses before optimizing.');
+    if (body.chosenPlaces) {
+      const viewport = await cityArea(destination);
+      const outside = candidates.find(c => !withinChosenCity(c.location, destination, viewport));
+      if (outside) throw chosenCityError(outside.location, destination);
+    }
     const rejected = body.stops.filter(s => guidePreferenceIssue(candidates.find(c => c.location.id === s.locationId)!.facts, body.preferences));
     const conflict = rejected.find(s => body.orderMode === 'manual' || s.mustVisit || s.locked || body.stops.slice(body.stops.indexOf(s) + 1).some(row => row.locked));
     if (conflict) {
@@ -183,7 +206,7 @@ export function registerGuideRoutes(app: FastifyInstance, context: { options: Se
     const banned = new Set<string>(); let maxVisits = 5;
     for (let attempt = 0; attempt < (body.orderMode === 'manual' ? 1 : 2); attempt++) {
       let selected: ReturnType<typeof chooseGuideOrder>;
-      try { selected = chooseGuideOrder(body, destination, candidates, matrix, ranking, Date.now(), banned, maxVisits, body.chosenPlaces ? 'less_travel' : style, aiVisits); } catch (error) {
+      try { selected = chooseGuideOrder(body, destination, candidates, matrix, ranking, Date.now(), banned, maxVisits, body.chosenPlaces ? 'less_travel' : style, aiVisits, !!body.chosenPlaces); } catch (error) {
         throw new ApiError(422, 'GUIDE_INFEASIBLE', body.chosenPlaces ? 'All chosen visits cannot fit the available time, opening windows and known budget. Reduce a visit duration, remove a place, extend your trip or revise the budget. No visit was silently removed.' : error instanceof Error ? error.message : 'No feasible day.');
       }
       const final = await addMeals(who, body, destination, start, end, candidates, selected.order, matrix, departure, cache);

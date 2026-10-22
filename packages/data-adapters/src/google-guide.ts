@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { coordinateSchema, type Coordinate } from '../../contracts/src/api';
-import { providerPlaceId } from '../../contracts/src/locations';
+import { providerPlaceId, cityViewportSchema, type CityViewport } from '../../contracts/src/locations';
 import type { GuideFacts, GuidePreferences } from '../../contracts/src/guide';
 import { zonedTime } from '../../domain/src/time';
 import { ProviderError } from './google';
@@ -11,10 +11,17 @@ const point = z.object({ day: z.number().int().min(0).max(6).default(0), hour: z
 const hoursSchema = z.object({ periods: z.array(z.object({ open: point, close: point.optional() })).max(30).optional(), weekdayDescriptions: z.array(z.string()).optional() });
 export const guidePlaceSchema = z.object({ id: providerPlaceId, displayName: z.object({ text: z.string().min(1).max(300) }), formattedAddress: z.string().min(1).max(1000), location: coordinateSchema, types: z.array(z.string()), businessStatus: z.string().optional(), priceLevel: z.string().optional(), rating: z.number().optional(), userRatingCount: z.number().int().optional(), currentOpeningHours: hoursSchema.optional(), regularOpeningHours: hoursSchema.optional(), accessibilityOptions: z.object({ wheelchairAccessibleEntrance: z.boolean().optional() }).optional(), goodForChildren: z.boolean().optional(), servesVegetarianFood: z.boolean().optional(), servesLunch: z.boolean().optional(), websiteUri: z.url().optional(), googleMapsUri: z.url().optional(), editorialSummary: z.object({ text: z.string().max(2500) }).optional(), containingPlaces: z.array(z.object({ id: providerPlaceId })).max(10).optional(), attributions: z.array(z.object({ provider: z.string(), providerUri: z.url().optional() })).optional() });
 export type GuidePlace = z.infer<typeof guidePlaceSchema>;
-export interface GuidePlacesProvider { discover(city: string, center: Coordinate, preferences: GuidePreferences, beforeAdditionalSearch?: () => void | Promise<void>): Promise<GuidePlace[]>; facts(placeId: string): Promise<GuidePlace>; nearbyRestaurants?(center: Coordinate, radiusMeters: number): Promise<GuidePlace[]>; photo?(placeId: string, beforeMedia: () => Promise<void>): Promise<PlacePhoto> }
+export interface GuidePlacesProvider { discover(city: string, center: Coordinate, preferences: GuidePreferences, beforeAdditionalSearch?: () => void | Promise<void>): Promise<GuidePlace[]>; facts(placeId: string): Promise<GuidePlace>; cityViewport?(placeId: string): Promise<CityViewport | null>; nearbyRestaurants?(center: Coordinate, radiusMeters: number): Promise<GuidePlace[]>; photo?(placeId: string, beforeMedia: () => Promise<void>): Promise<PlacePhoto> }
 const fields = ['id', 'displayName', 'formattedAddress', 'location', 'types', 'businessStatus', 'priceLevel', 'rating', 'userRatingCount', 'currentOpeningHours', 'regularOpeningHours', 'accessibilityOptions', 'goodForChildren', 'servesVegetarianFood', 'servesLunch', 'websiteUri', 'googleMapsUri', 'editorialSummary', 'containingPlaces', 'attributions'];
 export class GoogleGuidePlaces implements GuidePlacesProvider {
   constructor(private key: string, private request: typeof fetch = fetch) {}
+  async cityViewport(placeId: string): Promise<CityViewport | null> {
+    const id = providerPlaceId.parse(placeId);
+    const raw = await this.json(`https://places.googleapis.com/v1/places/${encodeURIComponent(id)}?languageCode=en`, { headers: { 'X-Goog-Api-Key': this.key, 'X-Goog-FieldMask': 'id,viewport' } });
+    const parsed = z.object({ id: providerPlaceId, viewport: cityViewportSchema.optional() }).safeParse(raw);
+    if (!parsed.success || parsed.data.id !== id) throw new ProviderError('INVALID_RESPONSE', 'Google could not verify the selected city map area. Retry the category lookup.');
+    return parsed.data.viewport ?? null;
+  }
   async photo(placeId: string, beforeMedia: () => Promise<void>): Promise<PlacePhoto> {
     const id = providerPlaceId.parse(placeId);
     const raw = await this.json(`https://places.googleapis.com/v1/places/${encodeURIComponent(id)}`, { headers: { 'X-Goog-Api-Key': this.key, 'X-Goog-FieldMask': 'photos' } });

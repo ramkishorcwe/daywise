@@ -11,7 +11,7 @@ test('category browsing and edits never plan; chosen visits optimize explicitly 
   await page.setViewportSize({ width: 1440, height: 1000 });
   const { inputs } = await setup(page, true);
   const discoveries: string[][] = [];
-  page.on('request', r => { if (r.url().endsWith('/guide/discover')) discoveries.push(r.postDataJSON().preferences.interests); });
+  page.on('request', r => { if (r.url().endsWith('/guide/discover')) { expect(r.postDataJSON().chosenPlaces).toBe(true); discoveries.push(r.postDataJSON().preferences.interests); } });
   await open(page); expect(discoveries).toHaveLength(0);
   await page.getByRole('button', { name: 'museums', exact: true }).click();
   await page.getByRole('button', { name: 'Add Provider Museum', exact: true }).click();
@@ -99,7 +99,7 @@ test('mobile place selection has no horizontal overflow', async ({ page }) => {
 test('specific-place search validates its provider candidate and prevents duplicates', async ({ page }) => {
   const { bank, inputs } = await setup(page); let additions = 0;
   await page.route('**/api/locations/resolve', r => r.fulfill({ json: bank[0].location }));
-  await page.route('**/api/guide/candidate', r => { additions++; expect(r.request().postDataJSON().locationId).toBe(bank[0].location.id); return r.fulfill({ json: bank[0] }); });
+  await page.route('**/api/guide/candidate', r => { additions++; expect(r.request().postDataJSON()).toMatchObject({ locationId: bank[0].location.id, chosenPlaces: true }); return r.fulfill({ json: bank[0] }); });
   await open(page);
   const search = page.getByRole('combobox', { name: 'Search another place', exact: true });
   await search.fill('museum'); await expect(page.getByRole('button', { name: 'Add searched place', exact: true })).toBeDisabled();
@@ -130,4 +130,15 @@ test('leaving the page cancels pending optimization and ignores its late respons
   await expect(page.getByRole('button', { name: 'Optimize route', exact: true })).toBeEnabled();
   await expect.poll(() => completed, { timeout: 5000 }).toBe(true);
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toHaveCount(0); expect(await page.evaluate(k => localStorage.getItem(k), key)).toBeNull();
+});
+
+test('an old out-of-city choice gives a specific city error and remains removable without automatic retries', async ({ page }) => {
+  const { inputs } = await setup(page); await open(page);
+  await page.getByRole('button', { name: 'museums', exact: true }).click(); await page.getByRole('button', { name: 'Add Provider Museum', exact: true }).click();
+  let attempts = 0;
+  await page.route('**/api/guide/plan', r => { attempts++; return r.fulfill({ status: 422, json: { error: { code: 'CHOSEN_PLACE_CITY', message: 'Provider Museum (Another city) is outside the selected city area. Remove it and refresh the category.' } } }); });
+  await page.getByRole('button', { name: 'Optimize route', exact: true }).click(); await expect(page.getByRole('alert')).toContainText('outside the selected city area');
+  await expect(page.getByLabel('Minutes at Provider Museum', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Remove Provider Museum', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Your visits · 0/5', exact: true })).toBeVisible();
+  expect(attempts).toBe(1); expect(inputs).toHaveLength(0); expect(await page.evaluate(k => localStorage.getItem(k), key)).toBeNull();
 });

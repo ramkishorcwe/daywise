@@ -47,7 +47,7 @@ export default function ChoosePlacesPage(props: Props) {
     if (!refresh && catalog[next]) return;
     const { abort, id } = begin('category');
     try {
-      const data = await discoverGuide(props.destination.id, props.date, { ...profile.data, interests: [next] }, abort.signal);
+      const data = await discoverGuide(props.destination.id, props.date, { ...profile.data, interests: [next] }, abort.signal, true);
       if (current(id, abort)) setCatalog(old => ({ ...old, [next]: data.candidates }));
     } catch (error) { if (current(id, abort)) failure(error); }
     finally { if (current(id, abort)) { pending.current = false; setBusy(null); } }
@@ -65,7 +65,7 @@ export default function ChoosePlacesPage(props: Props) {
     if (choices.some(row => row.candidate.location.placeId === extra.placeId)) { setError('This place is already in your visits.'); return; }
     const { abort, id } = begin('add');
     try {
-      const candidate = await addGuideCandidate(props.destination.id, props.date, profile.data, extra.id, abort.signal);
+      const candidate = await addGuideCandidate(props.destination.id, props.date, profile.data, extra.id, abort.signal, true);
       if (!current(id, abort)) return;
       if (!candidate.location.city || candidate.location.city.countryCode !== props.destination.city?.countryCode) throw new Error('Choose a place in the destination country. Check its address before adding it.');
       if (profile.data.visitedPlaceIds.includes(candidate.location.placeId ?? '')) throw new Error('This place is marked already visited. Update that preference in the day planner before adding it.');
@@ -96,14 +96,14 @@ export default function ChoosePlacesPage(props: Props) {
     <button type="button" className="text-button" onClick={props.onBack}><ArrowLeft size={16} /> Back to day planner</button>
     <div className="choose-places-intro"><h2>Choose your places</h2><p>{props.destination?.name ?? 'Select a destination in the day planner'}{props.date ? ` · ${props.date}` : ''}</p><p>Pick up to five visits. We compare their order using Google travel times, opening windows and your return deadline. Every chosen visit stays required.</p></div>
     <div className="choose-places-layout"><div className="choose-catalog live-card">
-      <h3>Browse by category</h3><p className="field-note">Real Google results for your city and nearby area; this is a shortlist, not a complete directory. Categories filter browsing. Your budget, food and accessibility preferences still apply.</p>
+      <h3>Browse by category</h3><p className="field-note">Google results checked against your selected city map area. This is a shortlist, not a complete directory. Your trip preferences still apply.</p>
       <div className="interest-chips" aria-label="Place categories">{interests.map(value => <button type="button" key={value} aria-pressed={category === value} className={`interest-chip ${category === value ? 'selected' : ''}`} disabled={!props.destination || !props.date || !profile.success || busy === 'plan' || busy === 'add'} onClick={() => void browse(value)}>{label(value)}</button>)}</div>
       {!profile.success && <p className="error-box" role="alert">{profile.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join(' ')} Return to the planner to fix these preferences.</p>}
       {busy === 'category' && <p role="status">Loading {label(category ?? '')} from Google…</p>}
       {!category && <p className="field-note">Choose a category to load places. Browsing never generates an itinerary.</p>}
       {category && busy !== 'category' && <div className="button-row"><h3>{label(category)}</h3><button type="button" className="text-button" disabled={disabled} onClick={() => void browse(category, true)}>Refresh category</button></div>}
       {rows && busy !== 'category' && <div className="choose-place-grid">{rows.map(candidate => { const selected = choices.some(row => row.candidate.location.placeId === candidate.location.placeId); return <article className="choose-place-card" key={candidate.location.placeId}>
-        <PlacePhoto placeId={candidate.location.placeId} name={candidate.location.name} /><div className="choose-place-content"><h4>{candidate.location.name}</h4><p>{candidate.location.address}</p>{candidate.location.city?.placeId !== props.destination?.city?.placeId && <p className="field-note">Outside or unverified against the city boundary. Review the address and travel time.</p>}<p className="field-note">{candidate.facts.rating !== null && `Google rating ${candidate.facts.rating}/5 · `}{candidate.suggestedMinutes} min suggested</p><p className="field-note">{candidate.facts.admission ? `${priceRange(candidate.facts.admission.minimum, candidate.facts.admission.maximum, candidate.facts.admission.currency)} · ${candidate.facts.admission.basis.replaceAll('_', ' ')}` : 'Admission price unverified'}</p><button type="button" className="button secondary" disabled={disabled || selected || choices.length >= 5} onClick={() => add(candidate)}>{selected ? 'Added' : <><Plus size={15} /> Add {candidate.location.name}</>}</button></div>
+        <PlacePhoto placeId={candidate.location.placeId} name={candidate.location.name} /><div className="choose-place-content"><h4>{candidate.location.name}</h4><p>{candidate.location.address}</p>{candidate.location.city?.placeId !== props.destination?.city?.placeId && <p className="field-note">Google locality: {candidate.location.city?.name ?? 'unverified'}. Checked against the selected city map area.</p>}<p className="field-note">{candidate.facts.rating !== null && `Google rating ${candidate.facts.rating}/5 · `}{candidate.suggestedMinutes} min suggested</p><p className="field-note">{candidate.facts.admission ? `${priceRange(candidate.facts.admission.minimum, candidate.facts.admission.maximum, candidate.facts.admission.currency)} · ${candidate.facts.admission.basis.replaceAll('_', ' ')}` : 'Admission price unverified'}</p><button type="button" className="button secondary" disabled={disabled || selected || choices.length >= 5} onClick={() => add(candidate)}>{selected ? 'Added' : <><Plus size={15} /> Add {candidate.location.name}</>}</button></div>
       </article>; })}</div>}
       {rows?.length === 0 && <p role="status">No matching places returned. Try another category or search below.</p>}
       <div className="choose-place-search"><h3>Find a specific place</h3><LocationField label="Search another place" value={extra} change={setExtra} bias={props.destination?.coordinates} onPending={setSearchPending} /><button type="button" className="button secondary" disabled={!extra || disabled || !props.destination || !props.date || !profile.success || choices.length >= 5} onClick={() => void addSearchedPlace()}>Add searched place</button></div>
