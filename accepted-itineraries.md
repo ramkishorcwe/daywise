@@ -9,6 +9,7 @@ Press **New itinerary** to start a blank draft without removing earlier accepted
 - `PUT /api/itineraries/:id` saves an accepted trip; `GET /api/itineraries` lists the current owner's IDs; `GET /api/itineraries/:id` retrieves a snapshot; `DELETE /api/itineraries/:id` removes its content. An ID is not a public sharing link. Every operation validates the signed-in owner; other owners receive 404.
 - The existing IndexedDB accepted-trip library remains a device backup. Opening a synced trip fetches its database record by ID and updates that backup. If the connection fails, an existing backup remains readable. A first fetch without a backup needs the backend.
 - Failed database saves show an error and a retry action. Their IDs remain pending and the accepted device backup is retained. They are not described as successfully saved to the database. Progress and explicit price allowances update the accepted copy, not unrelated draft edits.
+- Private storage allows up to 30 seconds including initial sign-in. A rejected Firebase token is refreshed once for the same user; ownership checks are never bypassed. Other failed writes require **Retry database saving**, which keeps the itinerary ID and does not rerun planning. Errors display the server code, HTTP status, rejected field paths and request reference when supplied. Device backup failures are labeled separately.
 - Firebase anonymous identity now persists in IndexedDB across browser restarts. This preserves access on the same browser profile; there is no new cross-device account login. Clearing authentication/browser data may lose access to that anonymous identity, even if an itinerary ID is known.
 
 ## Compatibility and deletion
@@ -22,3 +23,5 @@ Accepted provider snapshots remain historical estimates. Opening them never reru
 ## Verification
 
 `tests/accepted-itineraries.test.ts` covers ownership, multiple IDs, receipt exclusion, invalid/draft submissions, stale updates, persistence across local backend restart and deletion tombstones. `tests/e2e/database-itineraries.spec.ts` verifies two accepted itineraries, a blank new draft, ID-only localStorage, fetching after clearing the device backup, independent deletion, database failure and retry. Existing acceptance, offline recovery, GPS, comparison, pricing and sharing tests remain applicable.
+
+`tests/accepted-trip-connection.test.ts` covers one-time token renewal, bounded retry, cold sign-in beyond ten seconds and actionable validation/authentication errors. The browser suite also checks that validation failures retain the same backup and ID and that retry does not trigger another planning request.

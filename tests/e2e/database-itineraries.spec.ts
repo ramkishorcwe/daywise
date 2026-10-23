@@ -54,6 +54,7 @@ test('database failure preserves the accepted device backup and explicit retry s
   await page.route('**/api/itineraries/**', r => r.request().method() === 'PUT' && blocked ? r.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Database temporarily unavailable.' } } }) : r.fallback());
   await accept(page);
   await expect(page.getByRole('alert')).toContainText('Database saving failed');
+  await expect(page.getByRole('alert')).toContainText('UNAVAILABLE, HTTP 503');
   const before = await activeAcceptedTrip(page);
   expect((await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key)).pendingIds).toEqual([before.acceptedId]);
   await page.reload();
@@ -61,7 +62,7 @@ test('database failure preserves the accepted device backup and explicit retry s
   expect((await activeAcceptedTrip(page)).accepted).toEqual(before.accepted);
   await expect(page.getByRole('alert')).toContainText('Database saving failed');
   blocked = false;
-  await page.getByRole('button', { name: 'Retry local saving', exact: true }).click(); await synced(page);
+  await page.getByRole('button', { name: 'Retry database saving', exact: true }).click(); await synced(page);
   expect((await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key)).pendingIds).toEqual([]);
   expect((await activeAcceptedTrip(page)).acceptedId).toBe(before.acceptedId);
   await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(1);
@@ -71,6 +72,25 @@ test('database failure preserves the accepted device backup and explicit retry s
   await expect(page.getByRole('alert')).toContainText('could not be deleted');
   expect((await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key)).ids).toContain(before.acceptedId);
   expect((await activeAcceptedTrip(page)).acceptedId).toBe(before.acceptedId);
+});
+
+test('rejected saves show the exact field and retry preserves the ID without replanning', async ({ page }) => {
+  const state = await setup(page); let blocked = true, writes = 0;
+  await page.route('**/api/itineraries/**', async r => {
+    if (r.request().method() !== 'PUT') return r.fallback();
+    writes++;
+    if (!blocked) return r.fallback();
+    return r.fulfill({ status: 400, json: { error: { code: 'INVALID_INPUT', message: 'The request contains invalid fields.', fields: [{ path: 'trip.currency', message: 'Invalid currency.' }] }, requestId: 'req-test-validation' } });
+  });
+  await accept(page);
+  await expect(page.getByRole('alert')).toContainText('trip.currency');
+  await expect(page.getByRole('alert')).toContainText('req-test-validation');
+  const before = await activeAcceptedTrip(page);
+  expect(writes).toBe(1); expect(state.inputs).toHaveLength(1);
+  blocked = false;
+  await page.getByRole('button', { name: 'Retry database saving', exact: true }).click(); await synced(page);
+  expect((await activeAcceptedTrip(page)).acceptedId).toBe(before.acceptedId);
+  expect(writes).toBe(2); expect(state.inputs).toHaveLength(1);
 });
 test('legacy accepted snapshots migrate without losing either trip or uploading an unaccepted draft', async ({ page }) => {
   await setup(page); await accept(page); await synced(page);

@@ -8,10 +8,12 @@ import { rememberEvidence, attachEvidence, clearEvidence } from './evidence-cach
 import { openDB } from 'idb';
 
 let token: string | null = null;
-let refreshToken: (() => Promise<string>) | null = null;
+let refreshToken: ((forceRefresh?: boolean) => Promise<string>) | null = null;
 export const backendConnected = () => token !== null;
 export function disconnectBackend() { token = null; refreshToken = null; clearEvidence(); }
-export class HttpError extends Error { constructor(public status: number, public code: string, message: string) { super(message); } }
+// Refresh the same user's token. Never sign out or create another owner to retry a private save.
+export async function refreshBackendAuthentication() { if (!refreshToken) return false; token = await refreshToken(true); return true; }
+export class HttpError extends Error { constructor(public status: number, public code: string, message: string, public requestId?: string, public fields: string[] = []) { super(message); } }
 export async function request<T>(path: string, init: RequestInit = {}, authenticated = true): Promise<T> {
   if (authenticated && refreshToken) token = await refreshToken();
   const headers = new Headers(init.headers); if (init.body) headers.set('Content-Type', 'application/json');
@@ -24,7 +26,7 @@ export async function request<T>(path: string, init: RequestInit = {}, authentic
   try { response = await fetch(`/api${path}`, { ...init, ...(typeof init.body === 'string' && !path.startsWith('/itineraries') ? { body: attachEvidence(init.body) } : {}), headers, signal }); }
   catch (error) { if (init.signal?.aborted) throw error; if (timeout.aborted) throw timedOut(); throw new Error(import.meta.env.DEV ? 'The backend is unavailable. Start it with npm run dev:api, then retry.' : 'Daywise could not reach its server. Check your connection and retry; your saved trip is preserved.'); }
   let data: unknown; try { data = await response.json(); } catch (error) { if (init.signal?.aborted) throw error; if (timeout.aborted) throw timedOut(); throw new Error('The backend returned an unreadable response.'); }
-  if (!response.ok) { const failure = data as { error?: { code?: string; message?: string } }; throw new HttpError(response.status, failure.error?.code ?? 'REQUEST_FAILED', failure.error?.message ?? 'The request failed.'); }
+  if (!response.ok) { const failure = data as { error?: { code?: string; message?: string; fields?: { path?: string }[] }; requestId?: string }; throw new HttpError(response.status, failure.error?.code ?? 'REQUEST_FAILED', failure.error?.message ?? 'The request failed.', failure.requestId, failure.error?.fields?.flatMap(field => typeof field.path === 'string' ? [field.path] : []) ?? []); }
   rememberEvidence(data);
   return data as T;
 }

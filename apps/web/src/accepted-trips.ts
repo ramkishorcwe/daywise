@@ -4,8 +4,9 @@ import { acceptedTripSchema } from '../../../packages/contracts/src/accepted-tri
 import { localTripSchema, readLocalTrip, readTripReferences, writeAcceptedReference, markAcceptedSynced, forgetAcceptedReference, type LocalTrip } from './live-session';
 import { acceptedTripCopy } from '../../../packages/domain/src/accepted-trip';
 import { connected } from './location-api';
-import { request, HttpError } from './api';
+import { request, HttpError, refreshBackendAuthentication } from './api';
 export { acceptedTripCopy };
+export class DeviceSavingError extends Error {}
 
 const database = () => openDB('daywise-accepted-trips', 1, { upgrade(db) { db.createObjectStore('trips', { keyPath: 'acceptedId' }); } });
 function checked(value: LocalTrip) {
@@ -19,17 +20,42 @@ async function cachedTrips() {
   const db = await database();
   try { const rows = (await db.getAll('trips')).map(row => localTripSchema.safeParse(row)); return { trips: rows.flatMap(row => row.success && row.data.accepted && row.data.acceptedId ? [row.data] : []), skipped: rows.filter(row => !row.success || !row.data.accepted || !row.data.acceptedId).length }; } finally { db.close(); }
 }
-async function remote<T>(path: string, init: RequestInit = {}, timeout = 10000): Promise<T> {
-  const signal = AbortSignal.timeout(timeout); await connected(signal);
-  return request<T>(path, { ...init, signal });
+async function remote<T>(path: string, init: RequestInit = {}, timeout = 30000): Promise<T> {
+  const signal = AbortSignal.timeout(timeout);
+  try {
+    await connected(signal);
+    try { return await request<T>(path, { ...init, signal }); }
+    catch (failure) {
+      if (!(failure instanceof HttpError) || failure.status !== 401 || signal.aborted || !await refreshBackendAuthentication()) throw failure;
+      return await request<T>(path, { ...init, signal });
+    }
+  } catch (failure) {
+    if (signal.aborted) throw new HttpError(408, 'ITINERARY_TIMEOUT', 'The database connection took too long. Retry saving when your connection is stable.');
+    throw failure;
+  }
+}
+export function itineraryFailureMessage(failure: unknown) {
+  if (failure instanceof HttpError) {
+    const fields = failure.fields.length ? ` Fields: ${failure.fields.slice(0, 3).join(', ')}.` : '';
+    const reference = failure.requestId ? ` Request: ${failure.requestId}.` : '';
+    const advice = failure.status === 401 ? ' Your sign-in could not be renewed. Keep this tab and browser storage intact and retry.' : failure.status === 409 ? ' A newer saved version exists. Open Saved plans before making further changes.' : '';
+    return `${failure.message}${fields}${advice} (${failure.code}, HTTP ${failure.status}).${reference}`;
+  }
+  const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';
+  if (code.startsWith('auth/')) return `Your browser sign-in could not connect (${code}). Check your connection, keep browser storage intact and retry.`;
+  return 'The browser could not complete the database connection. Check your connection and retry.';
+}
+async function prepareAcceptedTrip(value: LocalTrip) {
+  try { const trip = checked(value); writeAcceptedReference(localStorage, trip.acceptedId!, true, false); await cacheTrip(trip); return trip; }
+  catch { throw new DeviceSavingError('Local saving failed. Your accepted trip is still on screen. Enable browser storage and retry.'); }
 }
 export async function saveAcceptedTrip(value: LocalTrip) {
-  const trip = checked(value); writeAcceptedReference(localStorage, trip.acceptedId!, true, false); await cacheTrip(trip);
+  const trip = await prepareAcceptedTrip(value);
   await remote(`/itineraries/${trip.acceptedId}`, { method: 'PUT', body: JSON.stringify({ trip, create: true }) });
   markAcceptedSynced(localStorage, trip.acceptedId!);
 }
 export async function updateAcceptedTrip(value: LocalTrip) {
-  const trip = checked(value); writeAcceptedReference(localStorage, trip.acceptedId!, true, false); await cacheTrip(trip);
+  const trip = await prepareAcceptedTrip(value);
   await remote(`/itineraries/${trip.acceptedId}`, { method: 'PUT', body: JSON.stringify({ trip, create: false }) });
   markAcceptedSynced(localStorage, trip.acceptedId!);
 }
@@ -38,7 +64,7 @@ export async function getAcceptedTrip(id: string) {
   // Pending accepted changes must not be overwritten by an older database version.
   if (fallback && readTripReferences(localStorage).pendingIds.includes(id)) return fallback;
   try {
-    const result = await remote<{ trip: unknown }>(`/itineraries/${id}`, {}, fallback ? 4000 : 10000);
+    const result = await remote<{ trip: unknown }>(`/itineraries/${id}`, {}, fallback ? 10000 : 30000);
     const trip = acceptedTripSchema.parse(result.trip); if (trip.acceptedId !== id) throw new Error('The database returned a different itinerary.');
     await cacheTrip(trip); return trip;
   } catch (failure) { if (fallback) return fallback; throw failure; }
@@ -69,7 +95,7 @@ export async function listAcceptedTrips() {
     }
     // Bound concurrent reads; retrieve each private itinerary through its owner-checked ID endpoint.
     for (let i = 0; i < result.ids.length; i += 3) await Promise.all(result.ids.slice(i, i + 3).map(async id => { rows.set(id, await getAcceptedTrip(id)); }));
-  } catch { warning = 'Database unavailable. Showing device backups; retry Refresh saved days when connected.'; }
+  } catch (failure) { warning = `Showing device backups. ${itineraryFailureMessage(failure)} Use Refresh saved days to retry.`; }
   return { trips: [...rows.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), skipped: local.skipped, warning };
 }
 export async function openAcceptedTrip(id: string) {
