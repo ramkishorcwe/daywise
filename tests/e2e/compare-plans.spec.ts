@@ -51,7 +51,7 @@ test('form edits clear comparisons, do not trigger planning, and preserve an exi
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
   const saved = await page.evaluate(key => localStorage.getItem(key), localKey);
-  await page.getByRole('button', { name: 'My day plan', exact: true }).click();
+  await page.getByRole('button', { name: 'Plan a trip', exact: true }).click();
   await page.getByRole('button', { name: 'Compare three plans', exact: true }).click();
   await expect(comparison(page)).toBeVisible();
   await comparison(page).getByRole('button', { name: 'Review Relaxed day', exact: true }).click();

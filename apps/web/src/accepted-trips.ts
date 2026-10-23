@@ -38,7 +38,7 @@ export function itineraryFailureMessage(failure: unknown) {
   if (failure instanceof HttpError) {
     const fields = failure.fields.length ? ` Fields: ${failure.fields.slice(0, 3).join(', ')}.` : '';
     const reference = failure.requestId ? ` Request: ${failure.requestId}.` : '';
-    const advice = failure.status === 401 ? ' Your sign-in could not be renewed. Keep this tab and browser storage intact and retry.' : failure.status === 409 ? ' A newer saved version exists. Open Saved plans before making further changes.' : '';
+    const advice = failure.status === 401 ? ' Your sign-in could not be renewed. Keep this tab and browser storage intact and retry.' : failure.status === 409 ? ' A newer saved version exists. Open Saved trips before making further changes.' : '';
     return `${failure.message}${fields}${advice} (${failure.code}, HTTP ${failure.status}).${reference}`;
   }
   const code = failure && typeof failure === 'object' && 'code' in failure ? String(failure.code) : '';

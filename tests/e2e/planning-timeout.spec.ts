@@ -18,7 +18,7 @@ test('planning timeout shows retry, sends no duplicate request and preserves the
   await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check(); await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('daywise-live-active-v1')!).acceptedId)).toBeTruthy();
   const before = (await activeAcceptedTrip(page)).acceptedGuide;
-  await page.getByRole('button', { name: /My day plan/ }).click(); await page.evaluate(() => { (window as any).shortPlanTimeout = true; });
+  await page.getByRole('button', { name: /Plan a trip/ }).click(); await page.evaluate(() => { (window as any).shortPlanTimeout = true; });
   let calls = 0; await page.route('**/api/guide/plan', async route => { calls++; await new Promise(resolve => setTimeout(resolve, 1000)); await route.abort().catch(() => {}); });
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Itinerary planning took longer than 80 seconds'); await expect(page.getByRole('alert')).not.toContainText('backend is unavailable');

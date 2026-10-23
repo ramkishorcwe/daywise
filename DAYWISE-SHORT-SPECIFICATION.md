@@ -42,13 +42,15 @@ Presentation reference · current implementation, 22 October 2026.
 
 ## 4. What the user sees
 
+Two main tabs: **Plan a trip** for the form and preview, and **Saved trips** for accepted itineraries. **New trip** is a header button. Open a saved itinerary for its prices, map and visits; **Follow this trip** jumps to its manual progress controls.
+
 - **Itinerary:** name, address, available image, arrival/departure, visit/travel/buffer durations and price.
 - **Map:** whole journey, numbered stops, route distance/time and per-leg Google Maps navigation.
 - **Prices:** group/per-person ranges for tickets, food and transport; unknowns stay visible.
 - **Festival advisories:** city/date-related notices with sources where available, not confirmed closures. Advisory lookups may follow city/date edits; planning still requires a button press.
-- **Saved plans:** accept multiple itineraries; **New itinerary** starts another draft. LocalStorage keeps IDs; the private database retrieves trips by ID. A device backup supports offline recovery. Delete trips individually; draft edits preserve accepted trips.
+- **Saved trips:** accept multiple itineraries; **New trip** starts another draft. LocalStorage keeps IDs; the private database retrieves trips by ID. A device backup supports offline recovery. Delete trips individually; draft edits preserve accepted trips.
 - **Share trip:** read-only page link through WhatsApp/copy/share; private endpoints excluded unless explicitly included. Snapshots expire after seven days; later edits do not update them.
-- **Follow my day:** manual completion/return reports after departure; no continuous tracking or GPS verification.
+- **Follow this trip:** manual completion/return reports after departure; no continuous tracking or GPS verification.
 
 ## 5. How prices work
 
@@ -78,7 +80,7 @@ Current app-side daily allowances: **1,000 Google provider attempts; 100 AI atte
 
 **Say:** “Daywise combines real places with my starting point, time, interests and budget. I can compare plans or choose stops, review the route and costs, accept it, reopen it after refresh and share the itinerary page.”
 
-**Demo:** locations → time/preferences → Plan or Compare → map/prices → Accept → refresh/Saved plans → Share. Show chosen-place optimization if time permits.
+**Demo:** locations → time/preferences → Plan or Compare → map/prices → Accept → refresh/Saved trips → Share. Show chosen-place optimization if time permits.
 
 **Practical value:** discovery, preference coverage, route ordering, timing, costs and trip management in one workflow.
 

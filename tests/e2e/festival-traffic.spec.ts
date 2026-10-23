@@ -53,12 +53,12 @@ test('festival warning survives acceptance and reload, without following unrelat
   await expect(review).toBeVisible();
   await expect.poll(async () => (await savedAcceptedTrips(page)).length).toBe(1);
   const accepted = await page.evaluate(() => localStorage.getItem('daywise-live-active-v1'));
-  await page.getByRole('button', { name: 'My day plan', exact: true }).click();
+  await page.getByRole('button', { name: 'Plan a trip', exact: true }).click();
   await page.getByLabel('Travel date', { exact: true }).fill('2026-10-21');
   await expect(page.getByRole('complementary', { name: advisory })).not.toContainText('Possible festival traffic');
   await page.waitForTimeout(1300); expect(state.inputs).toHaveLength(1);
   expect(await page.evaluate(() => localStorage.getItem('daywise-live-active-v1'))).toBe(accepted);
-  await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
+  await page.getByRole('button', { name: 'Open accepted trip', exact: true }).click();
   await expect(review.getByRole('complementary', { name: advisory })).toContainText('Dussehra');
   await expect(page.getByRole('region', { name: 'Whole journey map', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Trip price summary', exact: true })).toBeVisible();

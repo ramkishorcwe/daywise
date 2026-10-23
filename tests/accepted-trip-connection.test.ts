@@ -43,6 +43,6 @@ it('retains validation fields and request reference from the server response', a
 it('shows server validation fields and request reference, distinguishing a stale version', () => {
   const message = itineraryFailureMessage(new HttpError(400, 'INVALID_INPUT', 'Invalid fields.', 'req-example', ['trip.currency', 'trip.adults']));
   expect(message).toContain('trip.currency, trip.adults'); expect(message).toContain('req-example'); expect(message).toContain('HTTP 400');
-  expect(itineraryFailureMessage(new HttpError(409, 'STALE_REVISION', 'Newer version.'))).toContain('Open Saved plans');
+  expect(itineraryFailureMessage(new HttpError(409, 'STALE_REVISION', 'Newer version.'))).toContain('Open Saved trips');
   expect(itineraryFailureMessage({ code: 'auth/network-request-failed' })).toContain('auth/network-request-failed');
 });

@@ -92,7 +92,7 @@ test('optional meals, Any food, map highlights, saved preferences and manual edi
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: 'Completed visits', exact: true }).selectOption('3');
-  await page.getByRole('button', { name: /My day plan/ }).click();
+  await page.getByRole('button', { name: /Plan a trip/ }).click();
   await expect.poll(async () => (await savedAcceptedTrips(page)).length).toBe(1);
   const saved = await savedAcceptedTrips(page);
   expect(saved[0].guideSaved.preferences.meals.lunch.durationMinutes).toBe(50);
@@ -113,7 +113,7 @@ test('an infeasible requested meal preserves the accepted itinerary and offers a
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible();
   await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
-  await page.getByRole('button', { name: /My day plan/ }).click();
+  await page.getByRole('button', { name: /Plan a trip/ }).click();
   await page.getByRole('checkbox', { name: 'Include meal', exact: true }).uncheck();
   await page.getByRole('button', { name: 'Recalculate my day', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible();
@@ -121,7 +121,7 @@ test('an infeasible requested meal preserves the accepted itinerary and offers a
   await page.getByRole('checkbox', { name: 'Include meal', exact: true }).check();
   await page.getByRole('button', { name: 'Recalculate my day', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('No nearby meal fits');
-  await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
+  await page.getByRole('button', { name: 'Open accepted trip', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Provider Museum');
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
 });

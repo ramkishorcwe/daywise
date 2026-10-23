@@ -1,6 +1,8 @@
 # Multiple private itineraries
 
-Press **New itinerary** to start a blank draft without removing earlier accepted trips. Generate/review normally, then accept the itinerary to save it. Plan previews and form edits do not save. Reaccepting the identical reviewed plan updates its existing ID; accepting a newly generated plan creates another entry. **Saved plans** opens, lists and deletes individual accepted trips. Up to 100 active itineraries are supported per backend owner.
+The main navigation has **Plan a trip** and **Saved trips**. **New trip** is a header action, not a tab. Opening a saved trip shows its prices, journey map and itinerary; **Follow this trip** moves to the existing manual progress controls inside that trip. These navigation actions do not generate a plan or record progress.
+
+Press **New trip** to start a blank draft without removing earlier accepted trips. Generate/review normally, then accept the itinerary to save it. Plan previews and form edits do not save. Reaccepting the identical reviewed plan updates its existing ID; accepting a newly generated plan creates another entry. **Saved trips** opens, lists and deletes individual accepted trips. Up to 100 active itineraries are supported per backend owner.
 
 ## Storage and retrieval
 
@@ -14,7 +16,7 @@ Press **New itinerary** to start a blank draft without removing earlier accepted
 
 ## Compatibility and deletion
 
-Legacy full localStorage snapshots are validated and backed up in IndexedDB before the local record is replaced with ID references. Previously accepted device records can be uploaded when opening Saved plans; unsupported records are preserved. Optional legacy `destinationMode` metadata remains readable. No unaccepted draft is migrated into the accepted library.
+Legacy full localStorage snapshots are validated and backed up in IndexedDB before the local record is replaced with ID references. Previously accepted device records can be uploaded when opening Saved trips; unsupported records are preserved. Optional legacy `destinationMode` metadata remains readable. No unaccepted draft is migrated into the accepted library.
 
 Deleting one itinerary removes its database content, device backup and local reference, leaving other itineraries intact. Database deletion must succeed before the backup is removed. A failed deletion restores references and offers retry. Server ID-only tombstones prevent delayed saves from recreating deleted content. Already published shared pages/downloads are independent copies, as explained in the deletion dialog.
 

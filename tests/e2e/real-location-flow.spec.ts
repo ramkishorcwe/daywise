@@ -60,9 +60,9 @@ test('a GPS fix survives backend address failure and retries its exact point wit
 
 test('pending GPS callbacks after leaving the planner cannot update a new form or submit an address lookup', async ({ page }) => {
   const state = await mocks(page); await page.addInitScript(() => { navigator.geolocation.getCurrentPosition = callback => { (window as unknown as { deliver: PositionCallback }).deliver = callback; }; });
-  await page.goto('/?live=1'); await page.getByRole('button', { name: 'Use my current location', exact: true }).click(); await page.getByRole('button', { name: 'Saved plans', exact: true }).click();
+  await page.goto('/?live=1'); await page.getByRole('button', { name: 'Use my current location', exact: true }).click(); await page.getByRole('button', { name: 'Saved trips', exact: true }).click();
   await page.evaluate(() => (window as unknown as { deliver: PositionCallback }).deliver({ coords: { latitude: 51.5, longitude: -0.12, accuracy: 20 }, timestamp: Date.now() } as GeolocationPosition));
-  await page.getByRole('button', { name: 'My day plan', exact: true }).click(); await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toHaveValue(''); expect(state.reverses).toHaveLength(0);
+  await page.getByRole('button', { name: 'Plan a trip', exact: true }).click(); await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toHaveValue(''); expect(state.reverses).toHaveLength(0);
 });
 
 test('map pins preserve an unknown address and require confirmation while cancellation preserves the previous source', async ({ page }) => {
@@ -203,12 +203,12 @@ test('return selection, saved provider references and accepted routes remain ind
   const state = await mocks(page); await page.goto('/?live=1'); await essentials(page);
   await page.getByRole('checkbox', { name: 'Return to the same place', exact: true }).uncheck(); await expect(page.getByRole('button', { name: 'Plan my day', exact: true })).toBeDisabled(); await choose(page, 'Return location', 'returnstation');
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible(); expect(state.routeInputs[0].returnToStart).toBe(false); expect(state.routeInputs[0].endId).not.toBe(state.routeInputs[0].startId);
-  await acceptGuide(page); await page.getByRole('button', { name: 'My day plan', exact: true }).click(); await choose(page, 'Starting location', 'replacementhotel'); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Follow my day', exact: true }).click(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Start: Chosen provider-hotel-id'); await page.getByRole('button', { name: 'My day plan', exact: true }).click();
+  await acceptGuide(page); await page.getByRole('button', { name: 'Plan a trip', exact: true }).click(); await choose(page, 'Starting location', 'replacementhotel'); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open accepted trip', exact: true }).click(); await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Start: Chosen provider-hotel-id'); await page.getByRole('button', { name: 'Plan a trip', exact: true }).click();
   await page.getByLabel('Private day name', { exact: true }).fill('Private saved day'); await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await expect(page.getByRole('region', {name:'Guided itinerary review',exact:true})).toBeVisible(); await acceptGuide(page);
   await expect.poll(async () => (await savedAcceptedTrips(page)).length).toBe(2);
   const saved = await savedAcceptedTrips(page); expect(JSON.stringify(saved)).toContain('provider-replacementhotel-id'); expect(JSON.stringify(saved)).not.toContain('"receipt":');
-  await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await page.locator('.saved-card').filter({ hasText: 'Private saved day' }).getByRole('button', { name: 'Open saved itinerary', exact: true }).click();
+  await page.getByRole('button', { name: 'Saved trips', exact: true }).click(); await page.locator('.saved-card').filter({ hasText: 'Private saved day' }).getByRole('button', { name: 'Open saved itinerary', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Start: Chosen provider-replacementhotel-id');
 });
 
@@ -241,10 +241,10 @@ test('accepted price summaries stay with saved itineraries without a separate bu
   await page.getByText('Add missing cost ranges', { exact: true }).click();
   await page.getByLabel('Additional food & drinks minimum', { exact: true }).fill('30'); await page.getByLabel('Additional food & drinks maximum', { exact: true }).fill('40');
   await page.getByRole('button', { name: 'Apply price ranges', exact: true }).click(); await expect(page.getByTestId('trip-price-range')).toHaveText('£30.00 – £40.00');
-  await page.getByRole('button', { name: 'My day plan', exact: true }).click(); await page.getByLabel('Private day name', { exact: true }).fill('Second priced trip');
+  await page.getByRole('button', { name: 'Plan a trip', exact: true }).click(); await page.getByLabel('Private day name', { exact: true }).fill('Second priced trip');
   await page.getByText('Adjust the planned visits', { exact: true }).click(); await page.getByLabel('Visit duration for Chosen provider-landmark-id', { exact: true }).fill('45');
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click(); await acceptGuide(page);
-  await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Saved trips', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(2);
   await page.locator('.saved-card').filter({ hasText: 'First priced trip' }).getByRole('button', { name: 'Open saved itinerary', exact: true }).click();
   await expect(page.getByTestId('trip-price-range')).toHaveText('£30.00 – £40.00');
 });

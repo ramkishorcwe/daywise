@@ -1,0 +1,53 @@
+import { expect, test } from '@playwright/test';
+import { setup } from './helpers/live-guide';
+import { activeAcceptedTrip } from './helpers/accepted-trips';
+
+for (const width of [390, 1440]) test(`two main tabs preserve drafts and saved trips with contextual following at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  const state = await setup(page);
+  const navigation = page.getByRole('navigation', { name: 'Main navigation', exact: true });
+  await expect(navigation.getByRole('button')).toHaveCount(2);
+  await expect(navigation.getByRole('button', { name: 'Plan a trip', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(navigation.getByRole('button', { name: 'New trip', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'New trip', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Follow this trip', exact: true })).toHaveCount(0);
+
+  await page.getByLabel('Private day name', { exact: true }).fill('Navigation verification');
+  await navigation.getByRole('button', { name: 'Saved trips', exact: true }).click();
+  await expect(page.locator('.saved-card')).toHaveCount(0);
+  await navigation.getByRole('button', { name: 'Plan a trip', exact: true }).click();
+  await expect(page.getByLabel('Private day name', { exact: true })).toHaveValue('Navigation verification');
+  expect(state.inputs).toHaveLength(0);
+  await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();
+  await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
+  await expect(page.getByText('Accepted itinerary saved to database · ID kept on this device', { exact: true })).toBeVisible();
+  const accepted = await activeAcceptedTrip(page);
+  await expect(navigation.getByRole('button', { name: 'Saved trips', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('region', { name: 'Whole journey map', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Trip price summary', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Follow this trip', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Trip progress', exact: true })).toBeFocused();
+  await expect(page.getByRole('combobox', { name: 'Completed visits', exact: true })).toHaveValue('0');
+  expect((await activeAcceptedTrip(page)).progress).toBeUndefined();
+  expect(state.inputs).toHaveLength(1);
+
+  await navigation.getByRole('button', { name: 'Saved trips', exact: true }).click();
+  await expect(page.locator('.saved-card')).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await page.screenshot({ path: `.tmp/trip-navigation-${width}.png`, fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: 'New trip', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveValue('');
+  await expect(page.getByRole('combobox', { name: 'Starting location', exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Private day name', { exact: true })).toHaveValue('');
+  await navigation.getByRole('button', { name: 'Saved trips', exact: true }).click();
+  await expect(page.locator('.saved-card')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Open saved itinerary', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Whole journey map', exact: true })).toBeVisible();
+  expect((await activeAcceptedTrip(page)).acceptedId).toBe(accepted.acceptedId);
+  await page.getByRole('button', { name: 'Plan a trip', exact: true }).click();
+  await page.getByRole('button', { name: 'Open accepted trip', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Follow this trip', exact: true })).toBeVisible();
+  expect(state.inputs).toHaveLength(1);
+});

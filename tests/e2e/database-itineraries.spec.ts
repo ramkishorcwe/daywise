@@ -15,7 +15,7 @@ test('two explicitly accepted trips keep only ID references locally and load fro
   await page.getByLabel('Private day name', { exact: true }).fill('First database itinerary');
   await accept(page); await synced(page);
   const first = await activeAcceptedTrip(page);
-  await page.getByRole('button', { name: 'New itinerary', exact: true }).click();
+  await page.getByRole('button', { name: 'New trip', exact: true }).click();
   await expect(page.getByRole('combobox', { name: 'Destination city', exact: true })).toHaveValue('');
   expect(state.inputs).toHaveLength(1);
   for (const label of ['Destination city', 'Starting location']) {
@@ -36,12 +36,12 @@ test('two explicitly accepted trips keep only ID references locally and load fro
   await expect(page.getByRole('region', { name: 'Whole journey map', exact: true })).toBeVisible();
   expect((await activeAcceptedTrip(page)).title).toBe('Second database itinerary');
   expect(fetched.some(url => url.endsWith(second.acceptedId))).toBe(true);
-  await page.getByRole('button', { name: 'Saved plans', exact: true }).click();
+  await page.getByRole('button', { name: 'Saved trips', exact: true }).click();
   await expect(page.locator('.saved-card')).toHaveCount(2);
   await page.locator('.saved-card').filter({ hasText: 'First database itinerary' }).getByRole('button', { name: 'Open saved itinerary', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Whole journey map', exact: true })).toBeVisible();
   expect((await activeAcceptedTrip(page)).accepted).toEqual(first.accepted);
-  await page.getByRole('button', { name: 'Saved plans', exact: true }).click();
+  await page.getByRole('button', { name: 'Saved trips', exact: true }).click();
   await page.getByRole('button', { name: 'Delete Second database itinerary', exact: true }).click();
   await page.getByRole('button', { name: 'Delete trip from this device', exact: true }).click();
   await expect(page.locator('.saved-card')).toHaveCount(1);
@@ -65,7 +65,7 @@ test('database failure preserves the accepted device backup and explicit retry s
   await page.getByRole('button', { name: 'Retry database saving', exact: true }).click(); await synced(page);
   expect((await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key)).pendingIds).toEqual([]);
   expect((await activeAcceptedTrip(page)).acceptedId).toBe(before.acceptedId);
-  await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Saved trips', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(1);
   await page.route('**/api/itineraries/**', r => r.request().method() === 'DELETE' ? r.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Deletion unavailable.' } } }) : r.fallback());
   await page.getByRole('button', { name: `Delete ${before.title}`, exact: true }).click();
   await page.getByRole('button', { name: 'Delete trip from this device', exact: true }).click();
@@ -104,7 +104,7 @@ test('legacy accepted snapshots migrate without losing either trip or uploading 
     return [first.acceptedId, second.acceptedId];
   }, { key, original });
   await page.reload(); await synced(page);
-  await page.getByRole('button', { name: 'Saved plans', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Saved trips', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(2);
   const refs = await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key);
   expect(refs.version).toBe(2); expect(refs.ids.sort()).toEqual(ids.sort()); expect(refs.pendingIds).toEqual([]); expect(refs.accepted).toBeUndefined();
   const backendIds = await page.evaluate(async () => { const session = JSON.parse(sessionStorage.getItem('daywise-api-session')!); return (await (await fetch('/api/itineraries', { headers: { Authorization: `Bearer ${session.token}` } })).json()).ids; });

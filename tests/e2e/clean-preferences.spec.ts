@@ -27,13 +27,13 @@ test('strict no-match errors leave preferences editable and retain the accepted 
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toBeVisible();
   await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check();
   await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
-  await page.getByRole('button', { name: /My day plan/ }).click();
+  await page.getByRole('button', { name: /Plan a trip/ }).click();
   await page.getByRole('button', { name: 'temples', exact: true }).click();
   await page.route('**/api/guide/discover', r => r.fulfill({ status: 422, json: { error: { code: 'NO_GUIDE_CANDIDATES', message: 'No verified places match your selected interests. Your preferences were not relaxed.' } } }));
   await page.getByRole('button', { name: 'Plan my day', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('preferences were not relaxed');
   await expect(page.getByRole('button', { name: 'Plan my day', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'temples', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name: 'Follow my day', exact: true }).click();
+  await page.getByRole('button', { name: 'Open accepted trip', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Guided itinerary review', exact: true })).toContainText('Provider Garden');
 });

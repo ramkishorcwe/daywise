@@ -65,7 +65,7 @@ test('provider failures are actionable and a failed optimization does not replac
   await page.getByRole('checkbox', { name: 'I will confirm unverified hours, costs, accessibility and food preparation before visiting', exact: true }).check(); await page.getByRole('button', { name: 'Accept this guided itinerary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Report your progress', exact: true })).toBeVisible();
   const before = await page.evaluate(k => JSON.parse(localStorage.getItem(k)!).acceptedId, key);
-  await page.getByRole('button', { name: 'My day plan', exact: true }).click(); await open(page);
+  await page.getByRole('button', { name: 'Plan a trip', exact: true }).click(); await open(page);
   await page.route('**/api/guide/discover', r => r.fulfill({ status: 502, json: { error: { code: 'PROVIDER_UNAVAILABLE', message: 'Google is unavailable. Retry category lookup.' } } }));
   await page.getByRole('button', { name: 'museums', exact: true }).click(); await expect(page.getByRole('alert')).toContainText('Retry category lookup');
   await page.unroute('**/api/guide/discover');
