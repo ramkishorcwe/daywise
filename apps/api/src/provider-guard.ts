@@ -13,10 +13,10 @@ export class ProviderGuard {
     if (day !== this.day) { this.day = day; this.calls = 0; }
   }
   usage() { this.resetDay(); return { utcDay: this.day, attempts: this.calls, limit: this.dailyLimit, remaining: Math.max(0, this.dailyLimit - this.calls), scope: 'one_process' }; }
-  consume() {
-    if (this.hosted) return this.hosted.consume(this.service, this.dailyLimit);
+  consume(reserve = 0) {
+    if (this.hosted) return this.hosted.consume(this.service, Math.max(0, this.dailyLimit - reserve));
     this.resetDay();
-    if (this.calls >= this.dailyLimit) throw new ApiError(429, this.service === 'ai' ? 'AI_BUDGET_LIMIT' : 'PROVIDER_BUDGET_LIMIT', this.service === 'ai'
+    if (this.calls >= Math.max(0, this.dailyLimit - reserve)) throw new ApiError(429, this.service === 'ai' ? 'AI_BUDGET_LIMIT' : 'PROVIDER_BUDGET_LIMIT', this.service === 'ai'
       ? `The app's AI planning allowance is exhausted (${this.calls}/${this.dailyLimit} requests). It resets at 00:00 UTC. Turn off Use configured AI planning to continue with local planning. Your saved trip is preserved.`
       : `The app's Google Maps request allowance is exhausted (${this.calls}/${this.dailyLimit} requests). It resets at 00:00 UTC; the app operator can raise the local allowance. This is separate from Google's quota. Your saved trip is preserved.`);
     this.calls++;

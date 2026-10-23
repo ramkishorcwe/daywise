@@ -1,0 +1,18 @@
+.guide-comparison { margin: 26px 0; padding-top: 20px; border-top: 1px solid #dce5d3; min-width: 0; }
+.compare-plans-trigger { margin: 10px 0 0 10px; }
+.guide-comparison > h2 { font-size: 23px; margin: 0 0 10px; }
+.guide-comparison > p { font-size: 13px; }
+.guide-comparison-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+.guide-comparison-card { min-width: 0; border: 1px solid #dce5d3; border-radius: 14px; padding: 16px; background: #fffef9; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.guide-comparison-card.is-selected { border-color: #246e5b; box-shadow: 0 0 0 2px #246e5b25; background: #f3f7ee; }
+.guide-comparison-card h3 { font-size: 17px; margin: 0 0 8px; }
+.guide-comparison-card p { font-size: 12px; line-height: 1.6; }
+.guide-comparison-card dl { margin: 10px 0; }
+.guide-comparison-card dl > div { padding: 8px 0; border-bottom: 1px solid #e7ecdf; }
+.guide-comparison-card dt { font-size: 11px; color: #657466; }
+.guide-comparison-card dd { margin: 3px 0 0; font-size: 13px; font-weight: 700; }
+.guide-comparison-card .guide-comparison-places { font-size: 12px; }
+.guide-comparison-card .button { width: 100%; margin-top: auto; padding: 12px 8px; white-space: normal; font-size: 12px; min-height: 44px; }
+@media (max-width: 1200px) { .guide-comparison-grid { grid-template-columns: minmax(0, 1fr); } .guide-comparison-card dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; } }
+@media (max-width: 400px) { .guide-comparison-card dl { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .compare-plans-trigger { margin-left: 0; width: 100%; } }

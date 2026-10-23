@@ -5,7 +5,7 @@ import type { Coordinate } from '../../../packages/contracts/src/api';
 import type { LocationPreview } from './location';
 
 let connecting: Promise<unknown> | null = null;
-async function connected(signal?: AbortSignal) {
+export async function connected(signal?: AbortSignal) {
   if (!backendConnected()) {
     if (!connecting) connecting = connectBackend().finally(() => { connecting = null; });
     if (!signal) await connecting;
@@ -25,7 +25,7 @@ export const postLocation = async (path: string, body: unknown, signal?: AbortSi
   catch (failure) { if (!(failure instanceof HttpError) || failure.status !== 401 || signal?.aborted) throw failure; disconnectBackend(); await connected(signal); return send(); }
 };
 const post = postLocation;
-export const locationConfiguration = async () => z.strictObject({ autocomplete: z.boolean(), reverseGeocode: z.boolean(), timezone: z.boolean(), routing: z.boolean(), guideDiscovery: z.boolean().optional(), guideRouting: z.boolean().optional(), guideAssistant: z.enum(['local', 'openai', 'gemini']).optional(), issues: z.array(z.string().max(500)).max(10).optional() }).parse(await request('/locations/config', {}, false));
+export const locationConfiguration = async () => z.strictObject({ autocomplete: z.boolean(), reverseGeocode: z.boolean(), timezone: z.boolean(), routing: z.boolean(), festivalSearch: z.boolean().optional(), guideDiscovery: z.boolean().optional(), guideRouting: z.boolean().optional(), guideAssistant: z.enum(['local', 'openai', 'gemini']).optional(), issues: z.array(z.string().max(500)).max(10).optional() }).parse(await request('/locations/config', {}, false));
 function validatedLocation(value: unknown) { const parsed = locationSchema.safeParse(value); if (!parsed.success) throw new Error('The provider returned an invalid address or coordinates. Retry or choose another suggestion.'); return parsed.data; }
 export const searchLocations = async (input: string, sessionToken: string, citiesOnly: boolean, bias: Coordinate | undefined, signal: AbortSignal) => suggestionsSchema.parse(await post('/locations/autocomplete', { input, sessionToken, citiesOnly, ...(bias ? { bias } : {}) }, signal));
 export const selectLocation = async (placeId: string, sessionToken: string, destinationCity: boolean, signal: AbortSignal) => validatedLocation(await post('/locations/resolve', { placeId, sessionToken, destinationCity }, signal));

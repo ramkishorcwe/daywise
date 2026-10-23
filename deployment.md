@@ -20,7 +20,7 @@ Configure these in Vercel's encrypted production environment, never in Git:
   a home-IP restriction cannot authorize their requests. Keep the local key's
   existing IP restrictions. Use static egress if IP restriction is required.
 - `ASSISTANT_MODE=gemini`, `GEMINI_API_KEY`, `GEMINI_MODEL`.
-- `PROVIDER_DAILY_LIMIT=600`, `AI_DAILY_LIMIT=100`.
+- `PROVIDER_DAILY_LIMIT=1000`, `AI_DAILY_LIMIT=100`.
 - Public client configuration: `VITE_FIREBASE_PROJECT_ID`,
   `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_APP_ID`, `VITE_FIREBASE_AUTH_DOMAIN`,
   `VITE_GOOGLE_MAPS_BROWSER_KEY`. Only the browser Maps key may use a VITE name.
@@ -44,7 +44,7 @@ Paid calls are blocked if the counter is exhausted or the database is unavailabl
 Routing request hashes prevent duplicate submissions across instances. These
 application limits are separate from Google and Gemini provider quotas.
 
-Private trip recovery remains in this browser's local storage. A deployed
+Private accepted itineraries are stored in the owner-checked `daywiseItineraries` Firestore collection. LocalStorage retains IDs only; IndexedDB retains device backups. See [accepted-itineraries.md](accepted-itineraries.md). Firebase anonymous identity persists in IndexedDB on the same profile. A deployed
 website and `127.0.0.1` have separate storage; deploying does not migrate or
 delete the local trip.
 

@@ -12,7 +12,7 @@ function delayedFetch(delay: number) {
     signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
   })); vi.stubGlobal('fetch', fetcher); return fetcher;
 }
-it.each(['/guide/plan', '/guide/discover', '/plans/live'])('allows a successful %s response beyond the old 20-second cutoff without resubmitting', async path => {
+it.each(['/guide/plan', '/guide/compare', '/guide/discover', '/plans/live'])('allows a successful %s response beyond the old 20-second cutoff without resubmitting', async path => {
   const fetcher = delayedFetch(25000), result = request(path, {}, false);
   await vi.advanceTimersByTimeAsync(25000); await expect(result).resolves.toEqual({ ok: true }); expect(fetcher).toHaveBeenCalledTimes(1);
 });

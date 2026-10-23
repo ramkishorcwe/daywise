@@ -18,7 +18,7 @@ export class AssistantService {
   private aiBudget: ProviderGuard;
   constructor(private store: TripStore, private interpreter: IntentInterpreter, private fixtures: boolean, private clock = () => Date.now(), aiDailyLimit = 20, hostedBudget?: HostedBudget) { this.aiBudget = new ProviderGuard(aiDailyLimit, clock, 'ai', hostedBudget); }
   usage() { return this.aiBudget.usage(); }
-  reserveAI() { if (this.interpreter.mode !== 'local') return this.aiBudget.consume(); }
+  reserveAI(minimumRemaining = 0) { if (this.interpreter.mode !== 'local') return this.aiBudget.consume(minimumRemaining); }
   cleanup() { const now = this.clock(); for (const [id, record] of this.proposals) if (Date.parse(record.value.expiresAt) <= now) this.proposals.delete(id); this.aiBudget.cleanup(); }
   forget(owner: string, tripId: string) { for (const [id, record] of this.proposals) if (record.owner === owner && record.value.tripId === tripId) this.proposals.delete(id); }
   private context(trip: RemoteTrip) {

@@ -1,0 +1,28 @@
+.live-shell .choose-places-page[hidden] { display: none; }
+.live-shell .choose-places-intro { max-width: 850px; margin: 24px 0; }
+.live-shell .choose-places-intro h2 { font-size: 1.9rem; }
+.live-shell .choose-places-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 24px; align-items: start; }
+.live-shell .choose-catalog, .live-shell .choose-selection { min-width: 0; padding: 24px; }
+.live-shell .choose-catalog .interest-chips { margin: 20px 0; }
+.live-shell .choose-catalog .interest-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.live-shell .choose-catalog .interest-chip { min-height: 44px; border: 1px solid #c5d3ca; border-radius: 24px; padding: 9px 14px; background: #fff; color: #314c41; }
+.live-shell .choose-catalog .interest-chip[aria-pressed=true] { background: #246e5b; color: white; border-color: #246e5b; }
+.live-shell .choose-place-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.live-shell .choose-place-card { border: 1px solid #dce4d5; border-radius: 18px; overflow: hidden; min-width: 0; background: #f9faf6; }
+.live-shell .choose-place-card .guide-place-photo { width: 100%; height: 160px; margin: 0; border-radius: 0; }
+.live-shell .choose-place-card .guide-place-photo img { height: 130px; width: 100%; object-fit: cover; }
+.live-shell .choose-place-content { padding: 16px; overflow-wrap: anywhere; }
+.live-shell .choose-place-content h4 { font-size: 1.1rem; margin: 0 0 8px; }
+.live-shell .choose-place-content > p { font-size: .85rem; line-height: 1.5; }
+.live-shell .choose-place-content .button { width: 100%; white-space: normal; }
+.live-shell .choose-place-search { border-top: 1px solid #dce4d5; margin-top: 26px; padding-top: 20px; }
+.live-shell .choose-selected-list { padding-left: 22px; }
+.live-shell .choose-selected-list li { padding: 14px 0; border-bottom: 1px solid #dce4d5; overflow-wrap: anywhere; }
+.live-shell .choose-selected-list li > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.live-shell .choose-selected-list input { width: 100%; }
+.live-shell .choose-selection > .button { width: 100%; white-space: normal; }
+.live-shell .choose-route-review { margin-top: 32px; }
+.live-shell .choose-route-review > .provider-map { margin-bottom: 24px; }
+.live-shell .choose-places-page > .error-box { margin-top: 20px; }
+@media (max-width: 1050px) { .live-shell .choose-places-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 540px) { .live-shell .choose-place-grid { grid-template-columns: minmax(0, 1fr); } .live-shell .choose-catalog, .live-shell .choose-selection { padding: 18px; } }

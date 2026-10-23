@@ -24,9 +24,22 @@
 .guide-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; }
 .guide-summary span { background: #edf3e5; padding: 12px; border-radius: 8px; display: grid; gap: 4px; }
 .guide-budget { background: #f6f1e7; border-radius: 10px; padding: 14px; margin: 18px 0; }
+.guide-planning-details { margin: 20px 0; }
+.guide-planning-details > summary { cursor: pointer; font-weight: 600; color: #556a60; }
 .guide-timeline { list-style: none; padding: 0; display: grid; gap: 16px; }
 .guide-timeline > li { border-left: 3px solid #b6cbb0; padding: 14px; background: #f7f9f4; border-radius: 0 10px 10px 0; }
 .guide-timeline .guide-highlight { border-color: #246c5c; background: #e5f0df; }
+.guide-stop-card { display: grid; grid-template-columns: minmax(0, 1fr) 180px; gap: 20px; align-items: start; }
+.guide-stop-content { min-width: 0; }
+.guide-timeline .guide-stop-title { font-size: 18px; line-height: 1.4; text-align: left; }
+.guide-stop-address { color: #556a60; font-size: 14px; }
+.guide-stop-time { font-size: 14px; }
+.guide-place-photo { margin: 0; min-width: 0; border-radius: 10px; overflow: hidden; background: #e9eee7; }
+.guide-place-photo img { display: block; width: 100%; height: 140px; object-fit: cover; }
+.guide-place-photo figcaption { padding: 6px 8px; font-size: 10px; line-height: 1.4; color: #556a60; background: #f0f3ed; }
+.guide-place-photo figcaption a { margin: 0; }
+.guide-photo-status { display: flex; min-height: 140px; align-items: center; justify-content: center; padding: 12px; color: #65766b; font-size: 12px; }
+@media (max-width: 600px) { .guide-stop-card { grid-template-columns: minmax(0, 1fr); gap: 12px; } .guide-place-photo { grid-row: 1; } .guide-place-photo img { height: 180px; } }
 .guide-timeline a { display: inline-block; margin: 6px 12px 6px 0; color: #246c5c; text-decoration: underline; }
 .guide-break { padding: 12px; background: #f0ece0; border-radius: 8px; margin-top: 12px; }
 .guide-mode-choice { margin: 18px 0; padding: 16px; border: 1px solid #dce3d7; border-radius: 10px; }
@@ -38,3 +51,8 @@
 
 .stop-price { padding: .65rem .85rem; background: #f5f7ef; border-left: 3px solid #647345; border-radius: .5rem; margin: .75rem 0; }
 .stop-price p { margin: .3rem 0; }
+.guide-interest-coverage { margin: 16px 0; padding: 13px 15px; border: 1px solid #dce5d3; border-radius: 10px; background: #f4f7ee; font-size: 13px; overflow-wrap: anywhere; }
+.guide-interest-coverage p { margin: 4px 0; }
+.guide-interest-coverage ul { margin: 8px 0 0; padding-left: 18px; }
+.guide-interest-coverage li { margin: 6px 0; }
+.guide-interest-coverage.is-compact { padding: 9px; font-size: 11px; }
