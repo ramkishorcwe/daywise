@@ -2,6 +2,8 @@
 
 The main navigation has **Plan a trip** and **Saved trips**. **New trip** is a header action, not a tab. Opening a saved trip shows its prices, journey map and itinerary; **Follow this trip** moves to the existing manual progress controls inside that trip. These navigation actions do not generate a plan or record progress.
 
+Saved trips shows available device copies immediately, including while the latest acceptance is still saving. **Loading remaining trips…** remains visible until the database refresh and accepted-record migration finish; the empty-state message is hidden during loading. Database records appear as they arrive. A failed individual record does not prevent other records from loading, and refresh failures preserve visible copies and offer retry. The **Opened trip** badge identifies the selected saved card; its name/date/city also appear beside **Follow this trip** and its name/date above the progress controls. Following uses that opened trip's existing ID, not the newest save, date or GPS position.
+
 Press **New trip** to start a blank draft without removing earlier accepted trips. Generate/review normally, then accept the itinerary to save it. Plan previews and form edits do not save. Reaccepting the identical reviewed plan updates its existing ID; accepting a newly generated plan creates another entry. **Saved trips** opens, lists and deletes individual accepted trips. Up to 100 active itineraries are supported per backend owner.
 
 ## Storage and retrieval

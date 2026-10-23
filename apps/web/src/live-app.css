@@ -3,7 +3,14 @@
 
 .live-shell .topbar-actions{gap:16px;flex-shrink:0}
 .live-shell .new-trip-action{white-space:nowrap}
-.trip-detail-actions{display:flex;justify-content:flex-end;margin:0 0 20px}
+.opened-trip{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:20px;border:1px solid var(--line);border-radius:12px;background:#fff;margin-bottom:20px}
+.opened-trip>div{min-width:0;overflow-wrap:anywhere}
+.opened-trip h2{font-size:21px;margin:6px 0}
+.opened-trip p{font-size:13px;color:#60765f;line-height:1.7}
+.opened-trip .button{flex-shrink:0}
+.saved-card-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.opened-trip-badge{font-size:11px;font-weight:700;color:#215842;background:#e4efdf;border-radius:20px;padding:5px 9px}
+.library-loading{font-size:13px;color:#36563f;line-height:1.7;margin:14px 0}
 .trip-progress-section{scroll-margin-top:96px;border-radius:12px}
 .trip-progress-section:focus-visible{outline:3px solid #d69c55;outline-offset:4px}
 @media(max-width:760px){
@@ -11,7 +18,7 @@
   .live-shell .topbar-actions .connection{display:none}
   .live-shell .new-trip-action{padding:10px 12px;font-size:12px;min-height:44px}
   .live-shell .breadcrumb{min-width:0;flex-wrap:wrap;line-height:1.5}
-  .trip-detail-actions{justify-content:flex-start}
+  .opened-trip{align-items:flex-start;flex-direction:column;gap:14px}
   .trip-progress-section{scroll-margin-top:20px}
 }
 

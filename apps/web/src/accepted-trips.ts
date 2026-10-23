@@ -20,6 +20,7 @@ async function cachedTrips() {
   const db = await database();
   try { const rows = (await db.getAll('trips')).map(row => localTripSchema.safeParse(row)); return { trips: rows.flatMap(row => row.success && row.data.accepted && row.data.acceptedId ? [row.data] : []), skipped: rows.filter(row => !row.success || !row.data.accepted || !row.data.acceptedId).length }; } finally { db.close(); }
 }
+export const cachedAcceptedTrips = cachedTrips;
 async function remote<T>(path: string, init: RequestInit = {}, timeout = 30000): Promise<T> {
   const signal = AbortSignal.timeout(timeout);
   try {
@@ -83,20 +84,26 @@ export async function restoreAcceptedTrip(): Promise<{ trip: LocalTrip | null; e
     return { trip: refs.acceptedId ? await getAcceptedTrip(refs.acceptedId) : null, error: '' };
   } catch { return { trip: null, error: 'Your saved itinerary could not be loaded. Its ID and device backup were preserved. Check your connection and retry.' }; }
 }
-export async function listAcceptedTrips() {
+export async function listAcceptedTrips(onAvailable?: (trips: LocalTrip[]) => void) {
   const local = await cachedTrips(), rows = new Map(local.trips.map(trip => [trip.acceptedId!, trip]));
-  let warning = '';
+  const available = () => [...rows.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const failures: unknown[] = [];
+  onAvailable?.(available());
   try {
     const result = z.strictObject({ ids: z.array(z.string().uuid()).max(100) }).parse(await remote('/itineraries'));
+    // One unavailable record must not hide the remaining owner-checked trips.
+    for (let i = 0; i < result.ids.length; i += 3) await Promise.all(result.ids.slice(i, i + 3).map(async id => {
+      try { rows.set(id, await getAcceptedTrip(id)); onAvailable?.(available()); }
+      catch (failure) { failures.push(failure); }
+    }));
     // Migrate already-accepted device records only; a provider preview never enters this library.
     for (const trip of local.trips) if (!result.ids.includes(trip.acceptedId!)) {
-      writeAcceptedReference(localStorage, trip.acceptedId!, true, false);
-      await saveAcceptedTrip(trip);
+      try { writeAcceptedReference(localStorage, trip.acceptedId!, true, false); await saveAcceptedTrip(trip); }
+      catch (failure) { failures.push(failure); }
     }
-    // Bound concurrent reads; retrieve each private itinerary through its owner-checked ID endpoint.
-    for (let i = 0; i < result.ids.length; i += 3) await Promise.all(result.ids.slice(i, i + 3).map(async id => { rows.set(id, await getAcceptedTrip(id)); }));
-  } catch (failure) { warning = `Showing device backups. ${itineraryFailureMessage(failure)} Use Refresh saved days to retry.`; }
-  return { trips: [...rows.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), skipped: local.skipped, warning };
+  } catch (failure) { failures.push(failure); }
+  const warning = failures.length ? `Some saved trips could not be refreshed. Showing available trips and device backups. ${itineraryFailureMessage(failures[0])} Use Refresh saved days to retry.` : '';
+  return { trips: available(), skipped: local.skipped, warning };
 }
 export async function openAcceptedTrip(id: string) {
   const trip = await getAcceptedTrip(id); await cacheTrip(trip); writeAcceptedReference(localStorage, id); return trip;

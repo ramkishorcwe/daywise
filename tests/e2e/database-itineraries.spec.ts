@@ -105,6 +105,8 @@ test('legacy accepted snapshots migrate without losing either trip or uploading 
   }, { key, original });
   await page.reload(); await synced(page);
   await page.getByRole('button', { name: 'Saved trips', exact: true }).click(); await expect(page.locator('.saved-card')).toHaveCount(2);
+  // Device copies are visible before their background migration finishes.
+  await expect(page.getByText('Loading remaining trips…', { exact: true })).toHaveCount(0);
   const refs = await page.evaluate(k => JSON.parse(localStorage.getItem(k)!), key);
   expect(refs.version).toBe(2); expect(refs.ids.sort()).toEqual(ids.sort()); expect(refs.pendingIds).toEqual([]); expect(refs.accepted).toBeUndefined();
   const backendIds = await page.evaluate(async () => { const session = JSON.parse(sessionStorage.getItem('daywise-api-session')!); return (await (await fetch('/api/itineraries', { headers: { Authorization: `Bearer ${session.token}` } })).json()).ids; });
